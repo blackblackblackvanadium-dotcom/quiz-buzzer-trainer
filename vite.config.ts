@@ -18,8 +18,5 @@ export default defineConfig({
         icons: []
       }
     })
-  ],
-  test: {
-    environment: 'node'
-  }
+  ]
 })
