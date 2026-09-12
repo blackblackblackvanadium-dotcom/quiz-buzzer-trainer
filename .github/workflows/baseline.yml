@@ -16,14 +16,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare evidence directories
+        run: mkdir -p baseline-logs baseline-results baseline-artifacts baseline-test-results
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-
-      - name: Prepare evidence directories
-        run: mkdir -p baseline-logs baseline-results baseline-artifacts baseline-test-results
 
       - name: Gate 1 - npm install
         shell: bash
