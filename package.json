@@ -1,0 +1,26 @@
+{
+  "name": "quiz-buzzer-trainer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run --reporter=default --reporter=junit --outputFile.junit=baseline-test-results/junit.xml",
+    "build": "tsc -b && vite build"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "dexie": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest",
+    "vite-plugin-pwa": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}
