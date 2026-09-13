@@ -7,7 +7,11 @@ import {
   questionKey,
 } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
-import { withExclusiveAppWrite } from './concurrency';
+import {
+  broadcastDatabaseReplacement,
+  bumpDatabaseGeneration,
+  withExclusiveAppWrite,
+} from './concurrency';
 import {
   parseQuestionDatasetCsv,
   parseQuestionDatasetJson,
@@ -103,52 +107,60 @@ async function commitPreparedDataset(
   const issues = flattenIssues(dataset);
   assertNoBlockingQualityIssues(issues);
 
-  return withExclusiveAppWrite(() => database.transaction('rw', database.questions, database.attempts, async () => {
-    const existing = await database.questions.toArray();
-    const existingByKey = new Map(existing.map((record) => [record.key, record]));
+  return withExclusiveAppWrite(async () => {
+    const result = await database.transaction('rw', database.questions, database.attempts, async () => {
+      const existing = await database.questions.toArray();
+      const existingByKey = new Map(existing.map((record) => [record.key, record]));
 
-    assertNoNumericRevisionCollision(dataset.questions, existing);
+      assertNoNumericRevisionCollision(dataset.questions, existing);
 
-    if (mode === 'insert_only') {
-      const duplicateKey = dataset.questions.find((question) => existingByKey.has(questionKey(question)));
-      if (duplicateKey !== undefined) {
-        throw new Error(`Question revision is immutable and already exists: ${questionKey(duplicateKey)}`);
+      if (mode === 'insert_only') {
+        const duplicateKey = dataset.questions.find((question) => existingByKey.has(questionKey(question)));
+        if (duplicateKey !== undefined) {
+          throw new Error(`Question revision is immutable and already exists: ${questionKey(duplicateKey)}`);
+        }
+        await database.questions.bulkAdd(records);
+        return { mode, inserted: records.length, skipped: 0, replaced: 0, issues };
       }
-      await database.questions.bulkAdd(records);
-      return { mode, inserted: records.length, skipped: 0, replaced: 0, issues };
-    }
 
-    if (mode === 'merge') {
-      assertExistingRevisionContentImmutable(dataset.questions, existing, checkedAt);
-      const newQuestions = dataset.questions.filter((question) => !existingByKey.has(questionKey(question)));
-      if (newQuestions.length > 0) await database.questions.bulkAdd(newQuestions.map(toQuestionRecord));
-      return {
-        mode,
-        inserted: newQuestions.length,
-        skipped: dataset.questions.length - newQuestions.length,
-        replaced: 0,
-        issues,
-      };
-    }
+      if (mode === 'merge') {
+        assertExistingRevisionContentImmutable(dataset.questions, existing, checkedAt);
+        const newQuestions = dataset.questions.filter((question) => !existingByKey.has(questionKey(question)));
+        if (newQuestions.length > 0) await database.questions.bulkAdd(newQuestions.map(toQuestionRecord));
+        return {
+          mode,
+          inserted: newQuestions.length,
+          skipped: dataset.questions.length - newQuestions.length,
+          replaced: 0,
+          issues,
+        };
+      }
+
+      if (mode === 'restore') {
+        assertExistingRevisionContentImmutable(dataset.questions, existing, checkedAt);
+        const attempts = await database.attempts.toArray();
+        const orphanedAttempt = attempts.find((attempt) => !incomingKeys.has(`${attempt.questionId}::${attempt.revisionId}`));
+        if (orphanedAttempt !== undefined) {
+          throw new Error(
+            `Restore would orphan Attempt ${orphanedAttempt.attemptId}: ${orphanedAttempt.questionId}::${orphanedAttempt.revisionId}`,
+          );
+        }
+        const replaced = existing.length;
+        await database.questions.clear();
+        if (records.length > 0) await database.questions.bulkAdd(records);
+        return { mode, inserted: records.length, skipped: 0, replaced, issues };
+      }
+
+      const exhaustive: never = mode;
+      throw new Error(`Unsupported Question import mode: ${String(exhaustive)}`);
+    });
 
     if (mode === 'restore') {
-      assertExistingRevisionContentImmutable(dataset.questions, existing, checkedAt);
-      const attempts = await database.attempts.toArray();
-      const orphanedAttempt = attempts.find((attempt) => !incomingKeys.has(`${attempt.questionId}::${attempt.revisionId}`));
-      if (orphanedAttempt !== undefined) {
-        throw new Error(
-          `Restore would orphan Attempt ${orphanedAttempt.attemptId}: ${orphanedAttempt.questionId}::${orphanedAttempt.revisionId}`,
-        );
-      }
-      const replaced = existing.length;
-      await database.questions.clear();
-      if (records.length > 0) await database.questions.bulkAdd(records);
-      return { mode, inserted: records.length, skipped: 0, replaced, issues };
+      const generation = bumpDatabaseGeneration();
+      broadcastDatabaseReplacement(generation);
     }
-
-    const exhaustive: never = mode;
-    throw new Error(`Unsupported Question import mode: ${String(exhaustive)}`);
-  }));
+    return result;
+  });
 }
 
 /** Canonical JSON import. All three DATA ImportModes are available. */
