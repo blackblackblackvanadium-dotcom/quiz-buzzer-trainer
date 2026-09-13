@@ -1,4 +1,11 @@
-import type { Attempt, QuestionRevision, QuizMode, QuizSession, StudyState } from '../domain/types';
+import type {
+  Attempt,
+  PersistedAttempt,
+  QuestionRevision,
+  QuizMode,
+  QuizSession,
+  StudyState,
+} from '../domain/types';
 import { questionKey } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
 
@@ -60,7 +67,7 @@ export class QuestionRepository {
 export class AttemptRepository {
   constructor(private readonly database: QbtDatabase = db) {}
 
-  async add(attempt: Attempt): Promise<void> {
+  async add(attempt: PersistedAttempt): Promise<void> {
     await this.database.attempts.add(attempt);
   }
 
@@ -106,7 +113,7 @@ export class StudyStateRepository {
 }
 
 export async function persistAttemptTransaction(
-  attempt: Attempt,
+  attempt: PersistedAttempt,
   studyState: StudyState | null,
   database: QbtDatabase = db,
 ): Promise<void> {
@@ -118,7 +125,7 @@ export async function persistAttemptTransaction(
 
 /** P0 #4: a resolved Attempt and its Session progress/end state commit together. */
 export async function persistAttemptAndSessionTransaction(
-  attempt: Attempt,
+  attempt: PersistedAttempt,
   session: QuizSession,
   studyState: StudyState | null = null,
   database: QbtDatabase = db,
