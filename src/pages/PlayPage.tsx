@@ -232,7 +232,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
       {phase === 'result' && lastAttempt !== null && (
         <div className="result-card">
           <h2>{lastAttempt.outcome === 'correct' ? '正解' : lastAttempt.outcome === 'incorrect' ? '不正解' : lastAttempt.outcome}</h2>
-          <p>正答: <strong>{question?.canonicalAnswer}</strong></p>
+          <p>正答: <strong>{question?.answers.primaryAnswer.text}</strong></p>
           {lastAttempt.buzzIndex !== null && <p>BUZZ: {lastAttempt.buzzIndex}文字 / {((lastAttempt.buzzRatio ?? 0) * 100).toFixed(1)}%</p>}
           {lastAttempt.responseTimeMs !== null && <p>想起: {Math.round(lastAttempt.responseTimeMs)} ms</p>}
           <button className="primary-button" type="button" onClick={next}>次へ</button>
