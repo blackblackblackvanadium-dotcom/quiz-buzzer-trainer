@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { judgeAnswer } from '../../src/engine/judge';
 import { makeQuestionV1 } from '../fixtures/questionV1';
 
-const provenance = { method: 'test' } as const;
+const provenance = { method: 'human_verified' } as const;
 const question = makeQuestionV1({
   answers: {
     primaryAnswer: { id: 'primary', text: 'Ａ・Ｂ', provenance },
