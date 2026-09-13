@@ -4,6 +4,7 @@ import { QUALITY_PROFILE_VERSION, type Attempt } from '../../src/domain/types';
 import { DB_SCHEMA_VERSION, QbtDatabase } from '../../src/data/db';
 import { parseQuestionRecordV1 } from '../../src/data/validation';
 import type { LegacyQuestionRecordV1 } from '../../src/data/questionMigration';
+import { makeQuestionV1 } from '../fixtures/questionV1';
 
 interface LegacyStoredQuestion extends LegacyQuestionRecordV1 {
   readonly key: string;
@@ -17,6 +18,22 @@ class LegacyDatabase extends Dexie {
     super(name);
     this.version(1).stores({
       questions: '&key, questionId, revisionId, category, pattern, difficulty, *tags',
+      attempts: '&attemptId, [questionId+revisionId], questionId, revisionId, sessionId, mode, outcome, completedAt',
+      studyStates: '[questionId+revisionId], questionId, revisionId, dueAt',
+      sessions: '&sessionId, mode, startedAt, endedAt',
+      settings: '&key',
+    });
+  }
+}
+
+class PreConformanceV2Database extends Dexie {
+  questions!: Table<Record<string, unknown>, string>;
+  attempts!: Table<Attempt, string>;
+
+  constructor(name: string) {
+    super(name);
+    this.version(2).stores({
+      questions: '&key, questionId, revisionId, revision, classification.genre.primary, metadata.status',
       attempts: '&attemptId, [questionId+revisionId], questionId, revisionId, sessionId, mode, outcome, completedAt',
       studyStates: '[questionId+revisionId], questionId, revisionId, dueAt',
       sessions: '&sessionId, mode, startedAt, endedAt',
@@ -51,11 +68,11 @@ function legacyQuestion(overrides: Partial<LegacyStoredQuestion> = {}): LegacySt
   };
 }
 
-function attempt(): Attempt {
+function attempt(questionId = 'q', revisionId = 'r1'): Attempt {
   return {
     attemptId: 'attempt-1',
-    questionId: 'q',
-    revisionId: 'r1',
+    questionId,
+    revisionId,
     sessionId: 'session-1',
     mode: 'normal',
     outcome: 'correct',
@@ -71,9 +88,45 @@ function attempt(): Attempt {
   };
 }
 
+function preConformanceV2Record(): Record<string, unknown> {
+  const current = makeQuestionV1({ questionId: 'q', revisionId: 'r1', revision: 1 });
+  const oldProvenance = { method: 'seed', generator: 'quiz-buzzer-trainer', generatorVersion: 'seed-v1' };
+  return {
+    ...current,
+    key: 'q::r1',
+    answers: {
+      primaryAnswer: { ...current.answers.primaryAnswer, provenance: oldProvenance },
+      acceptedAnswers: current.answers.acceptedAnswers.map((entry) => ({ ...entry, provenance: oldProvenance })),
+      rejectedAnswers: current.answers.rejectedAnswers.map((entry) => ({ ...entry, provenance: oldProvenance })),
+    },
+    classification: {
+      ...current.classification,
+      genre: { ...current.classification.genre, provenance: oldProvenance },
+      questionType: current.classification.questionType === undefined
+        ? undefined
+        : { ...current.classification.questionType, provenance: oldProvenance },
+      difficulty: current.classification.difficulty === undefined
+        ? undefined
+        : { ...current.classification.difficulty, provenance: oldProvenance },
+    },
+    determiningPoints: current.determiningPoints.map((point) => ({ ...point, provenance: oldProvenance })),
+    derived: {
+      ...current.derived,
+      exactTextHash: 'legacy-v2-placeholder',
+      duplicateDetectionKey: 'legacy-v2-key',
+      generatorVersion: 'legacy-v2',
+    },
+    quality: {
+      status: 'valid',
+      issues: [],
+      lastCheckedAt: current.quality.lastCheckedAt,
+    },
+  };
+}
+
 describe('DB schema migration', () => {
-  it('migrates legacy questions with canonical provenance/derived/quality and preserves Attempt history', async () => {
-    const name = 'qbt-migration-v1-v2';
+  it('migrates legacy v1 questions with canonical provenance/derived/quality and preserves Attempt history', async () => {
+    const name = 'qbt-migration-v1-v3';
     databaseNames.push(name);
     const legacy = new LegacyDatabase(name);
     const historicalAttempt = attempt();
@@ -112,6 +165,33 @@ describe('DB schema migration', () => {
     upgraded.close();
   });
 
+  it('migrates already-deployed DB v2 residual records to canonical v3 without breaking Attempt history', async () => {
+    const name = 'qbt-migration-v2-v3';
+    databaseNames.push(name);
+    const v2 = new PreConformanceV2Database(name);
+    const historicalAttempt = attempt();
+    await v2.open();
+    await v2.questions.add(preConformanceV2Record());
+    await v2.attempts.add(historicalAttempt);
+    v2.close();
+
+    const upgraded = new QbtDatabase(name);
+    await upgraded.open();
+    expect(upgraded.verno).toBe(DB_SCHEMA_VERSION);
+
+    const stored = await upgraded.questions.get('q::r1');
+    expect(stored).toBeDefined();
+    const { key: _key, ...question } = stored!;
+    const parsed = parseQuestionRecordV1(question);
+    expect(parsed.answers.primaryAnswer.provenance.method).toBe('human_unverified');
+    expect(parsed.classification.genre.provenance.method).toBe('human_unverified');
+    expect(parsed.quality.qualityProfileVersion).toBe(QUALITY_PROFILE_VERSION);
+    expect(parsed.derived.exactTextHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(parsed.derived.duplicateDetectionKey).toBe('abcd');
+    expect(await upgraded.attempts.get('attempt-1')).toEqual(historicalAttempt);
+    upgraded.close();
+  });
+
   it('aborts migration when the migrated legacy record fails canonical verification', async () => {
     const name = 'qbt-migration-invalid-v1';
     databaseNames.push(name);
@@ -125,7 +205,7 @@ describe('DB schema migration', () => {
     upgraded.close();
   });
 
-  it('aborts migration when two legacy revisionIds map to the same numeric revision', async () => {
+  it('aborts migration when two revisions of the same questionId map to the same numeric revision', async () => {
     const name = 'qbt-migration-numeric-revision-collision';
     databaseNames.push(name);
     const legacy = new LegacyDatabase(name);
