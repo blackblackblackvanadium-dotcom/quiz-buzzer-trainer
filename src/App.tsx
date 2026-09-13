@@ -52,9 +52,6 @@ export default function App() {
           <button className="primary-button" type="button" onClick={() => setSessionMode(mode)}>
             {MODE_CAPABILITIES[mode].label}を開始
           </button>
-          {MODE_CAPABILITIES[mode].policyStatus !== 'specified' && (
-            <p className="policy-note">{MODE_CAPABILITIES[mode].unresolvedPolicy}</p>
-          )}
         </section>
       )}
 
