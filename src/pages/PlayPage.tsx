@@ -1,11 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Attempt, BuzzSnapshot, QuestionRevision, QuizMode, QuizPhase, SessionId } from '../domain/types';
+import type {
+  Attempt,
+  BuzzSnapshot,
+  KimariReference,
+  QuestionRevision,
+  QuizMode,
+  QuizPhase,
+  QuizSession,
+  SessionId,
+  StudyState,
+} from '../domain/types';
 import { createAttempt } from '../engine/attemptFactory';
 import { judgeAnswer } from '../engine/judge';
+import {
+  createModeSessionState,
+  isCompetitiveMode,
+  resolveModeAttempt,
+  terminateModeSession,
+  type ModeSessionState,
+} from '../engine/modeSessionEngine';
+import { createSessionRecord, endSessionRecord, updateSessionProgress } from '../engine/sessionFactory';
 import { transitionPhase } from '../engine/stateMachine';
 import { TypewriterEngine, type TypewriterSnapshot } from '../engine/typewriterEngine';
-import { AttemptRepository, QuestionRepository, SessionRepository, StudyStateRepository, persistAttemptTransaction } from '../data/repositories';
-import { MODE_CAPABILITIES, selectQuestionsForMode } from '../modes/strategies';
+import {
+  QuestionRepository,
+  SessionRepository,
+  StudyStateRepository,
+  persistAttemptAndSessionTransaction,
+} from '../data/repositories';
+import {
+  MODE_CAPABILITIES,
+  resolveKimariReference,
+  selectQuestionsForMode,
+} from '../modes/strategies';
 import { initialStudyState, updateStudyState } from '../modes/studyScheduler';
 
 interface PlayPageProps {
@@ -24,6 +51,14 @@ function randomId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+function formatEndReason(session: QuizSession | null): string {
+  if (session?.endReason === 'survival_failed') return 'Survival failed';
+  if (session?.endReason === 'survival_cleared') return 'Survival cleared';
+  if (session?.endReason === 'user_ended') return 'Session ended';
+  if (session?.endReason === 'fatal_error') return 'Session error';
+  return 'Session complete';
+}
+
 export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
   const [questions, setQuestions] = useState<QuestionRevision[]>([]);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -32,42 +67,82 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
   const [buzz, setBuzz] = useState<BuzzSnapshot | null>(null);
   const [answer, setAnswer] = useState('');
   const [lastAttempt, setLastAttempt] = useState<Attempt | null>(null);
+  const [session, setSession] = useState<QuizSession | null>(null);
+  const [modeState, setModeState] = useState<ModeSessionState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const engineRef = useRef<TypewriterEngine | null>(null);
   const questionStartedAtRef = useRef<string>('');
   const sessionIdRef = useRef<SessionId>(randomId('session'));
+  const sessionStartedAtRef = useRef<string>(new Date().toISOString());
+  const savingRef = useRef(false);
 
   const capability = MODE_CAPABILITIES[mode];
   const question = questions[questionIndex] ?? null;
+  const kimariReference = useMemo<KimariReference | null>(
+    () => (mode === 'kimari' && question !== null ? resolveKimariReference(question) : null),
+    [mode, question],
+  );
 
   useEffect(() => {
     let cancelled = false;
     const repo = new QuestionRepository();
     const studyRepo = new StudyStateRepository();
     const sessionRepo = new SessionRepository();
-    sessionRepo
-      .create({
+
+    Promise.all([repo.list(), studyRepo.list()]).then(async ([items, states]) => {
+      if (cancelled) return;
+      const selected = selectQuestionsForMode(mode, items, states, new Date().toISOString());
+      setQuestions(selected);
+      setQuestionIndex(0);
+
+      if (selected.length === 0) {
+        setPhase('ready');
+        return;
+      }
+
+      const competitiveState = isCompetitiveMode(mode)
+        ? createModeSessionState(mode, selected.length)
+        : null;
+      const created = createSessionRecord({
         sessionId: sessionIdRef.current,
         mode,
-        startedAt: new Date().toISOString(),
-        endedAt: null,
-      })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
-    Promise.all([repo.list(), studyRepo.list()]).then(([items, states]) => {
+        startedAt: sessionStartedAtRef.current,
+        targetQuestionCount: selected.length,
+        modeResult: competitiveState?.modeResult ?? null,
+      });
+      // put() is intentionally idempotent under React StrictMode's effect replay.
+      await sessionRepo.put(created);
       if (cancelled) return;
-      setQuestions(selectQuestionsForMode(mode, items, states, new Date().toISOString()));
+      setModeState(competitiveState);
+      setSession(created);
       setPhase('ready');
     }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
+
     return () => {
       cancelled = true;
       engineRef.current?.pause();
-      void sessionRepo.end(sessionIdRef.current, new Date().toISOString());
     };
   }, [mode]);
 
+  useEffect(() => {
+    if (error === null || session === null || session.endReason !== null) return;
+    const failed = endSessionRecord(
+      session,
+      'fatal_error',
+      new Date().toISOString(),
+      { modeResult: modeState?.modeResult ?? session.modeResult },
+    );
+    setSession(failed);
+    void new SessionRepository().put(failed).catch(() => undefined);
+  }, [error, modeState, session]);
+
   const startQuestion = useCallback(() => {
     if (question === null) return;
+    if (mode === 'kimari' && kimariReference === null) {
+      setError('Kimari-ji target is missing an unambiguous Kimari reference.');
+      return;
+    }
     setBuzz(null);
     setAnswer('');
     setLastAttempt(null);
@@ -90,7 +165,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     const engine = new TypewriterEngine(question.prompt, 85);
     engineRef.current = engine;
     engine.start((snapshot) => setReader(snapshot));
-  }, [capability.usesTypewriter, mode, question]);
+  }, [capability.usesTypewriter, kimariReference, mode, question]);
 
   const doBuzz = useCallback(() => {
     if (phase !== 'reading' || engineRef.current === null) return;
@@ -99,89 +174,188 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     setPhase(transitionPhase(phase, 'BUZZ', mode));
   }, [mode, phase]);
 
-  const saveOutcome = useCallback(async (outcome: 'pass' | 'skip') => {
-    if (question === null || (phase !== 'reading' && phase !== 'answering')) return;
-    engineRef.current?.pause();
-    const completedAt = new Date().toISOString();
-    const attempt = createAttempt({
-      attemptId: randomId('attempt'),
-      question,
-      sessionId: sessionIdRef.current,
-      mode,
-      outcome,
-      judge: null,
-      submittedAnswer: null,
-      startedAt: questionStartedAtRef.current || completedAt,
-      completedAt,
-      buzz,
-      responseTimeMs: null,
-    });
-    await new AttemptRepository().add(attempt);
-    setLastAttempt(attempt);
-    setPhase('result');
-  }, [buzz, mode, phase, question]);
+  const persistResolvedAttempt = useCallback(async (
+    attempt: Attempt,
+    studyState: StudyState | null,
+  ): Promise<void> => {
+    if (session === null) throw new Error('Session is not initialized');
 
-  const submitAnswer = useCallback(async () => {
-    if (question === null || phase !== 'answering') return;
+    let nextSession: QuizSession;
+    let nextModeState = modeState;
 
-    let responseTimeMs: number | null = null;
-    if (capability.requiresBuzz) {
-      const engine = engineRef.current;
-      if (engine === null) {
-        setError('回答時間を確定するクイズエンジンがありません。');
-        return;
-      }
-      try {
-        responseTimeMs = engine.confirmAnswerSubmit();
-      } catch (reason: unknown) {
-        setError(reason instanceof Error ? reason.message : String(reason));
-        return;
-      }
-    }
-
-    const judged = judgeAnswer(question, answer);
-    const completedAt = new Date().toISOString();
-    const attempt = createAttempt({
-      attemptId: randomId('attempt'),
-      question,
-      sessionId: sessionIdRef.current,
-      mode,
-      outcome: judged.isCorrect ? 'correct' : 'incorrect',
-      judge: judged,
-      submittedAnswer: answer,
-      startedAt: questionStartedAtRef.current || completedAt,
-      completedAt,
-      buzz,
-      responseTimeMs,
-    });
-
-    if (mode === 'review' || mode === 'study') {
-      const studyRepo = new StudyStateRepository();
-      const previous = (await studyRepo.get(question.questionId, question.revisionId)) ?? initialStudyState(question, new Date());
-      await persistAttemptTransaction(attempt, updateStudyState(previous, attempt, new Date()));
+    if (isCompetitiveMode(mode)) {
+      if (modeState === null) throw new Error(`${mode} engine state is not initialized`);
+      const resolution = resolveModeAttempt(modeState, attempt);
+      nextModeState = resolution.state;
+      nextSession = resolution.state.endReason === null
+        ? updateSessionProgress(session, resolution.state.consumedQuestionCount, resolution.state.modeResult)
+        : endSessionRecord(
+            session,
+            resolution.state.endReason,
+            attempt.completedAt,
+            {
+              consumedQuestionCount: resolution.state.consumedQuestionCount,
+              modeResult: resolution.state.modeResult,
+            },
+          );
     } else {
-      await new AttemptRepository().add(attempt);
+      nextSession = updateSessionProgress(session, session.consumedQuestionCount + 1, null);
     }
 
-    setLastAttempt(attempt);
-    setPhase(transitionPhase(phase, 'SUBMIT', mode));
-  }, [answer, buzz, capability.requiresBuzz, mode, phase, question]);
+    await persistAttemptAndSessionTransaction(attempt, nextSession, studyState);
+    setSession(nextSession);
+    setModeState(nextModeState);
+  }, [mode, modeState, session]);
 
-  const next = useCallback(() => {
-    if (phase !== 'result') return;
-    const nextIndex = questionIndex + 1;
-    if (nextIndex >= questions.length) {
-      setPhase('finished');
+  const saveOutcome = useCallback(async (outcome: 'pass' | 'skip') => {
+    if (savingRef.current || question === null || session === null) return;
+    if (outcome === 'skip' && phase !== 'reading') return;
+    if (outcome === 'pass' && phase !== 'reading' && phase !== 'answering') return;
+    if (mode === 'survival' && outcome === 'skip') {
+      setError('Skip is forbidden in Survival.');
       return;
     }
-    setQuestionIndex(nextIndex);
-    setPhase('ready');
-  }, [phase, questionIndex, questions.length]);
 
-  const progress = useMemo(() => `${Math.min(questionIndex + 1, questions.length)} / ${questions.length}`, [questionIndex, questions.length]);
+    savingRef.current = true;
+    try {
+      engineRef.current?.pause();
+      const completedAt = new Date().toISOString();
+      const attempt = createAttempt({
+        attemptId: randomId('attempt'),
+        question,
+        sessionId: sessionIdRef.current,
+        mode,
+        outcome,
+        judge: null,
+        submittedAnswer: null,
+        startedAt: questionStartedAtRef.current || completedAt,
+        completedAt,
+        buzz,
+        responseTimeMs: null,
+        kimariReference,
+      });
+      await persistResolvedAttempt(attempt, null);
+      setLastAttempt(attempt);
+      setPhase(transitionPhase(phase, outcome === 'pass' ? 'PASS' : 'SKIP', mode));
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      savingRef.current = false;
+    }
+  }, [buzz, kimariReference, mode, persistResolvedAttempt, phase, question, session]);
+
+  const submitAnswer = useCallback(async () => {
+    if (savingRef.current || question === null || session === null || phase !== 'answering') return;
+    savingRef.current = true;
+    try {
+      let responseTimeMs: number | null = null;
+      if (capability.requiresBuzz) {
+        const engine = engineRef.current;
+        if (engine === null) throw new Error('回答時間を確定するクイズエンジンがありません。');
+        responseTimeMs = engine.confirmAnswerSubmit();
+      }
+
+      const judged = judgeAnswer(question, answer);
+      const completedAt = new Date().toISOString();
+      const attempt = createAttempt({
+        attemptId: randomId('attempt'),
+        question,
+        sessionId: sessionIdRef.current,
+        mode,
+        outcome: judged.isCorrect ? 'correct' : 'incorrect',
+        judge: judged,
+        submittedAnswer: answer,
+        startedAt: questionStartedAtRef.current || completedAt,
+        completedAt,
+        buzz,
+        responseTimeMs,
+        kimariReference,
+      });
+
+      let nextStudyState: StudyState | null = null;
+      if (mode === 'review' || mode === 'study') {
+        const studyRepo = new StudyStateRepository();
+        const previous = (await studyRepo.get(question.questionId, question.revisionId))
+          ?? initialStudyState(question, new Date());
+        nextStudyState = updateStudyState(previous, attempt, new Date());
+      }
+
+      await persistResolvedAttempt(attempt, nextStudyState);
+      setLastAttempt(attempt);
+      setPhase(transitionPhase(phase, 'SUBMIT', mode));
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      savingRef.current = false;
+    }
+  }, [answer, buzz, capability.requiresBuzz, kimariReference, mode, persistResolvedAttempt, phase, question, session]);
+
+  const next = useCallback(async () => {
+    if (savingRef.current || phase !== 'result' || session === null) return;
+    savingRef.current = true;
+    try {
+      if (isCompetitiveMode(mode) && modeState?.endReason !== null && modeState?.endReason !== undefined) {
+        setPhase('finished');
+        return;
+      }
+
+      const nextIndex = questionIndex + 1;
+      if (nextIndex >= questions.length) {
+        const ended = endSessionRecord(session, 'completed', new Date().toISOString());
+        await new SessionRepository().put(ended);
+        setSession(ended);
+        setPhase('finished');
+        return;
+      }
+
+      setQuestionIndex(nextIndex);
+      questionStartedAtRef.current = '';
+      setLastAttempt(null);
+      const loading = transitionPhase(phase, 'NEXT', mode);
+      setPhase(transitionPhase(loading, 'READY', mode));
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      savingRef.current = false;
+    }
+  }, [mode, modeState?.endReason, phase, questionIndex, questions.length, session]);
+
+  const endManually = useCallback(async () => {
+    if (savingRef.current || session === null || session.endReason !== null) return;
+    savingRef.current = true;
+    try {
+      engineRef.current?.pause();
+      const terminatedState = modeState === null ? null : terminateModeSession(modeState, 'user_ended');
+      const ended = endSessionRecord(
+        session,
+        'user_ended',
+        new Date().toISOString(),
+        { modeResult: terminatedState?.modeResult ?? session.modeResult },
+      );
+      await new SessionRepository().put(ended);
+      setModeState(terminatedState);
+      setSession(ended);
+      setPhase('finished');
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      savingRef.current = false;
+    }
+  }, [modeState, session]);
+
+  const progress = useMemo(
+    () => `${Math.min(questionIndex + 1, questions.length)} / ${questions.length}`,
+    [questionIndex, questions.length],
+  );
+  const survivalScore = modeState?.mode === 'survival' ? modeState.score : null;
 
   if (error !== null) {
-    return <section className="screen"><div className="error-card" role="alert">{error}</div></section>;
+    return (
+      <section className="screen">
+        <div className="error-card" role="alert">{error}</div>
+        <button className="primary-button" type="button" onClick={onSessionEnd}>メニューへ戻る</button>
+      </section>
+    );
   }
 
   if (phase === 'loading') {
@@ -189,18 +363,35 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
   }
 
   if (questions.length === 0) {
-    return <section className="screen"><p>問題データがありません。</p></section>;
+    return (
+      <section className="screen">
+        <p>{mode === 'kimari' ? '有効な決まり字基準位置を持つ問題がありません。' : '問題データがありません。'}</p>
+        <button className="primary-button" type="button" onClick={onSessionEnd}>メニューへ戻る</button>
+      </section>
+    );
   }
 
   if (phase === 'finished') {
-    return <section className="screen"><div className="result-card"><h2>Session complete</h2><p>{progress}</p><button className="primary-button" type="button" onClick={onSessionEnd}>メニューへ戻る</button></div></section>;
+    return (
+      <section className="screen">
+        <div className="result-card">
+          <h2>{formatEndReason(session)}</h2>
+          <p>{session?.consumedQuestionCount ?? 0} / {session?.targetQuestionCount ?? questions.length}</p>
+          {survivalScore !== null && <p>Score: <strong>{survivalScore}</strong></p>}
+          <button className="primary-button" type="button" onClick={onSessionEnd}>メニューへ戻る</button>
+        </div>
+      </section>
+    );
   }
 
   return (
     <section className="screen play-screen" aria-live="polite">
       <header className="play-header">
-        <div><strong>{capability.label}</strong><span className="muted"> {progress}</span></div>
-        {capability.policyStatus !== 'specified' && <span className="spec-badge">CORE確認待ち</span>}
+        <div>
+          <strong>{capability.label}</strong><span className="muted"> {progress}</span>
+          {survivalScore !== null && <span className="muted"> Score {survivalScore}</span>}
+        </div>
+        <button type="button" onClick={() => void endManually()}>終了</button>
       </header>
 
       <main className="question-stage">
@@ -216,7 +407,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
           <button className="buzz-button" type="button" onPointerDown={doBuzz}>BUZZ</button>
           <div className="secondary-actions">
             <button type="button" onClick={() => void saveOutcome('pass')}>Pass</button>
-            <button type="button" onClick={() => void saveOutcome('skip')}>Skip</button>
+            {mode !== 'survival' && <button type="button" onClick={() => void saveOutcome('skip')}>Skip</button>}
           </div>
         </div>
       )}
@@ -226,6 +417,9 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
           <label htmlFor="answer-input">回答</label>
           <input id="answer-input" autoFocus value={answer} onChange={(event) => setAnswer(event.target.value)} autoComplete="off" />
           <button className="primary-button" type="submit">判定</button>
+          {(mode === 'kimari' || mode === 'survival') && (
+            <button type="button" onClick={() => void saveOutcome('pass')}>Pass</button>
+          )}
         </form>
       )}
 
@@ -235,7 +429,13 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
           <p>正答: <strong>{question?.answers.primaryAnswer.text}</strong></p>
           {lastAttempt.buzzIndex !== null && <p>BUZZ: {lastAttempt.buzzIndex}文字 / {((lastAttempt.buzzRatio ?? 0) * 100).toFixed(1)}%</p>}
           {lastAttempt.responseTimeMs !== null && <p>想起: {Math.round(lastAttempt.responseTimeMs)} ms</p>}
-          <button className="primary-button" type="button" onClick={next}>次へ</button>
+          {lastAttempt.kimari !== null && (
+            <p>決まり字差: {lastAttempt.kimari.deltaGraphemes === null ? '—' : `${lastAttempt.kimari.deltaGraphemes >= 0 ? '+' : ''}${lastAttempt.kimari.deltaGraphemes}`}</p>
+          )}
+          {survivalScore !== null && <p>Score: <strong>{survivalScore}</strong></p>}
+          <button className="primary-button" type="button" onClick={() => void next()}>
+            {session?.endReason === null ? '次へ' : 'セッション結果'}
+          </button>
         </div>
       )}
     </section>
