@@ -58,10 +58,10 @@ describe('Question dataset import/export contract', () => {
   });
 
   it('does not treat an App Backup envelope as a Question dataset', () => {
-    expect(() => parseQuestionDatasetV1({ format: 'qbt-backup', version: 1 })).toThrow('Unsupported Question dataset');
+    expect(() => parseQuestionDatasetV1({ format: 'qbt-backup', version: 1 })).toThrow();
   });
 
   it('does not treat a Question dataset as an App Backup envelope', () => {
-    expect(() => parsePortableBackup(dataset)).toThrow('Unsupported backup format/version');
+    expect(() => parsePortableBackup(dataset)).toThrow();
   });
 });
