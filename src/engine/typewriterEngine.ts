@@ -28,8 +28,7 @@ export class TypewriterEngine {
   readonly intervalMs: number;
 
   private committedCount = 0;
-  private firstCommitAtMs: number | null = null;
-  private nextDueAtMs: number | null = null;
+  private startedAtMs: number | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private paused = true;
   private onCommit: ((snapshot: TypewriterSnapshot) => void) | null = null;
@@ -48,21 +47,20 @@ export class TypewriterEngine {
   }
 
   start(onCommit: (snapshot: TypewriterSnapshot) => void): void {
-    if (!this.paused || this.firstCommitAtMs !== null) {
+    if (!this.paused || this.startedAtMs !== null) {
       throw new Error('TypewriterEngine can only be started once');
     }
+
     this.onCommit = onCommit;
     this.paused = false;
+    this.startedAtMs = this.clock.now();
 
     if (this.graphemes.length === 0) {
       this.onCommit(this.snapshot());
       return;
     }
 
-    const now = this.clock.now();
-    this.firstCommitAtMs = now;
-    this.commitOne();
-    this.scheduleFrom(now + this.intervalMs);
+    this.scheduleNextCommit();
   }
 
   pause(): void {
@@ -75,14 +73,19 @@ export class TypewriterEngine {
   }
 
   /**
-   * Deterministic BUZZ rule: every grapheme whose scheduled commit time is
-   * <= buzzAtMs is committed before the BUZZ snapshot is taken.
+   * BUZZ is based only on graphemes that were actually committed before the
+   * BUZZ handler entered this method. Scheduled/due-but-not-executed timer
+   * callbacks never advance the presentation and are never caught up here.
    */
   buzz(buzzAtMs = this.clock.now()): BuzzSnapshot {
-    if (this.firstCommitAtMs === null) {
+    const startedAtMs = this.startedAtMs;
+    if (startedAtMs === null) {
       throw new Error('Cannot BUZZ before reading starts');
     }
-    this.flushScheduledCommitsThrough(buzzAtMs);
+
+    // Freeze presentation first. JavaScript executes this synchronously, so a
+    // stale timer callback that runs later observes paused=true and cannot
+    // commit another grapheme.
     this.pause();
 
     const totalGraphemeCount = this.graphemes.length;
@@ -92,43 +95,31 @@ export class TypewriterEngine {
       totalGraphemeCount,
       buzzRatio: totalGraphemeCount === 0 ? 0 : buzzIndex / totalGraphemeCount,
       visibleText: visibleText(this.graphemes, buzzIndex),
-      buzzTimeMs: Math.max(0, buzzAtMs - this.firstCommitAtMs),
+      buzzTimeMs: Math.max(0, buzzAtMs - startedAtMs),
       buzzAtMs,
     };
   }
 
-  private scheduleFrom(dueAtMs: number): void {
-    if (this.paused || this.committedCount >= this.graphemes.length) {
-      this.nextDueAtMs = null;
-      return;
-    }
-    this.nextDueAtMs = dueAtMs;
-    const delayMs = Math.max(0, dueAtMs - this.clock.now());
+  /**
+   * One executed timer callback produces at most one presentation commit.
+   * The next interval starts from that actual callback execution, so delayed
+   * timers slow the reveal instead of revealing multiple graphemes at once.
+   */
+  private scheduleNextCommit(): void {
+    if (this.paused || this.committedCount >= this.graphemes.length) return;
+
     this.clearTimer();
     this.timer = this.scheduler.set(() => {
       this.timer = null;
-      if (this.paused || this.nextDueAtMs === null) return;
-      const due = this.nextDueAtMs;
-      this.flushScheduledCommitsThrough(this.clock.now());
-      if (!this.paused && this.committedCount < this.graphemes.length) {
-        const next = this.nextDueAtMs ?? due + this.intervalMs;
-        this.scheduleFrom(next);
-      }
-    }, delayMs);
-  }
+      if (this.paused || this.committedCount >= this.graphemes.length) return;
 
-  private flushScheduledCommitsThrough(atMs: number): void {
-    if (this.paused || this.nextDueAtMs === null) return;
-    let due = this.nextDueAtMs;
-    while (due <= atMs && this.committedCount < this.graphemes.length) {
       this.commitOne();
-      due += this.intervalMs;
-    }
-    this.nextDueAtMs = this.committedCount >= this.graphemes.length ? null : due;
+      this.scheduleNextCommit();
+    }, this.intervalMs);
   }
 
   private commitOne(): void {
-    if (this.committedCount >= this.graphemes.length) return;
+    if (this.paused || this.committedCount >= this.graphemes.length) return;
     this.committedCount += 1;
     this.onCommit?.(this.snapshot());
   }
