@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { QuestionDatasetV1 } from '../../src/domain/types';
-import { parseQuestionDatasetJson, serializeQuestionDataset } from '../../src/data/questionDataset';
+import {
+  parseQuestionDatasetCsv,
+  parseQuestionDatasetJson,
+  serializeQuestionDataset,
+  serializeQuestionDatasetCsv,
+} from '../../src/data/questionDataset';
 import { parsePortableBackup, parseQuestionDatasetV1 } from '../../src/data/validation';
 import { validQuestionV1 } from '../fixtures/questionV1';
 
@@ -14,9 +19,38 @@ const dataset: QuestionDatasetV1 = {
   questions: [validQuestionV1],
 };
 
+const csvMetadata = {
+  datasetId: dataset.datasetId,
+  datasetVersion: dataset.datasetVersion,
+  exportedAt: dataset.exportedAt,
+  generator: dataset.generator,
+};
+
 describe('Question dataset import/export contract', () => {
   it('round-trips canonical QuestionDatasetV1 JSON', () => {
     expect(parseQuestionDatasetJson(serializeQuestionDataset(dataset))).toEqual(dataset);
+  });
+
+  it('round-trips canonical questions through the auxiliary CSV format', () => {
+    const csv = serializeQuestionDatasetCsv(dataset);
+    const parsed = parseQuestionDatasetCsv(csv, csvMetadata);
+    expect(parsed).toEqual(dataset);
+    expect(csv.split('\n')[0]).toContain('answersJson');
+  });
+
+  it('handles commas, quotes, and newlines through CSV escaping', () => {
+    const complex: QuestionDatasetV1 = {
+      ...dataset,
+      questions: [{ ...validQuestionV1, prompt: 'A,"B"\nC' }],
+    };
+    const csv = serializeQuestionDatasetCsv(complex);
+    expect(parseQuestionDatasetCsv(csv, csvMetadata).questions[0]?.prompt).toBe('A,"B"\nC');
+  });
+
+  it('rejects a malformed CSV header and invalid revision values', () => {
+    expect(() => parseQuestionDatasetCsv('wrong\n', csvMetadata)).toThrow('header');
+    const csv = serializeQuestionDatasetCsv(dataset).replace(',1,abcd,', ',0,abcd,');
+    expect(() => parseQuestionDatasetCsv(csv, csvMetadata)).toThrow('positive integer');
   });
 
   it('rejects a future dataset schema version deterministically', () => {
