@@ -1,5 +1,8 @@
 import type { Attempt } from '../domain/types';
-import { isScoredAttempt } from './kpis';
+
+function isFirstExposureScoredAttempt(attempt: Attempt): boolean {
+  return attempt.outcome === 'correct' || attempt.outcome === 'incorrect';
+}
 
 /**
  * QBT-05 First-Exposure ordering contract.
@@ -19,7 +22,7 @@ export function compareFirstExposureOrder(a: Attempt, b: Attempt): number {
 export function selectFirstExposureScoredAttempts(attempts: readonly Attempt[]): Attempt[] {
   const firstByLogicalQuestion = new Map<string, Attempt>();
 
-  for (const attempt of attempts.filter(isScoredAttempt).sort(compareFirstExposureOrder)) {
+  for (const attempt of attempts.filter(isFirstExposureScoredAttempt).sort(compareFirstExposureOrder)) {
     if (!firstByLogicalQuestion.has(attempt.questionId)) {
       firstByLogicalQuestion.set(attempt.questionId, attempt);
     }
