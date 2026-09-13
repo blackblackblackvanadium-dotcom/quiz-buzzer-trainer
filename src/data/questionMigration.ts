@@ -1,10 +1,11 @@
 import {
   QUESTION_SCHEMA_VERSION,
   QUALITY_PROFILE_VERSION,
+  type ProvenanceMethod,
   type QuestionRecordV1,
 } from '../domain/types';
 import { computeDerivedQuestionData } from './questionIntegrity';
-import { parseQuestionRecordV1 } from './validation';
+import { parseQuestionRecordV1, prepareQuestionRecordV1 } from './validation';
 
 export interface LegacyQuestionRecordV1 {
   readonly key?: string;
@@ -23,7 +24,10 @@ export interface LegacyQuestionRecordV1 {
   readonly createdAt: string;
 }
 
-const MIGRATION_VERSION = 'question-schema-v1-db-migration-2';
+const MIGRATION_VERSION = 'question-schema-v1-db-migration-3';
+const CANONICAL_PROVENANCE_METHODS = new Set<ProvenanceMethod>([
+  'human_verified', 'human_unverified', 'imported', 'computed', 'rule_inferred', 'ai_inferred', 'unknown',
+]);
 
 function revisionNumber(revisionId: string): number {
   const match = /^r(\d+)$/iu.exec(revisionId.trim());
@@ -34,6 +38,62 @@ function revisionNumber(revisionId: string): number {
 
 function safeIsoDate(value: string): string {
   return Number.isFinite(Date.parse(value)) ? value : '1970-01-01T00:00:00.000Z';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeProvenanceMethod(value: unknown): ProvenanceMethod {
+  if (CANONICAL_PROVENANCE_METHODS.has(value as ProvenanceMethod)) return value as ProvenanceMethod;
+  if (value === 'seed') return 'human_unverified';
+  if (value === 'legacy_db_v1_migration') return 'imported';
+  return 'unknown';
+}
+
+function normalizeProvenance(value: unknown): void {
+  if (!isRecord(value)) return;
+  value.method = normalizeProvenanceMethod(value.method);
+}
+
+/**
+ * Upgrades records written by the first Schema-v1 implementation before the
+ * final QBT-02 conformance pass. It normalizes provenance methods and required
+ * quality metadata, then runs the canonical derived/quality preparation step.
+ */
+export function migratePreConformanceQuestionRecord(value: unknown, checkedAt: string): QuestionRecordV1 {
+  if (!isRecord(value)) throw new Error('Pre-conformance Question must be an object');
+  const clone = JSON.parse(JSON.stringify(value)) as unknown;
+  if (!isRecord(clone)) throw new Error('Pre-conformance Question must be serializable as an object');
+
+  const answers = clone.answers;
+  if (isRecord(answers)) {
+    const primary = answers.primaryAnswer;
+    if (isRecord(primary)) normalizeProvenance(primary.provenance);
+    for (const item of Array.isArray(answers.acceptedAnswers) ? answers.acceptedAnswers : []) {
+      if (isRecord(item)) normalizeProvenance(item.provenance);
+    }
+    for (const item of Array.isArray(answers.rejectedAnswers) ? answers.rejectedAnswers : []) {
+      if (isRecord(item)) normalizeProvenance(item.provenance);
+    }
+  }
+
+  const classification = clone.classification;
+  if (isRecord(classification)) {
+    if (isRecord(classification.genre)) normalizeProvenance(classification.genre.provenance);
+    if (isRecord(classification.questionType)) normalizeProvenance(classification.questionType.provenance);
+    if (isRecord(classification.difficulty)) normalizeProvenance(classification.difficulty.provenance);
+  }
+
+  for (const point of Array.isArray(clone.determiningPoints) ? clone.determiningPoints : []) {
+    if (isRecord(point)) normalizeProvenance(point.provenance);
+  }
+
+  if (isRecord(clone.quality) && clone.quality.qualityProfileVersion === undefined) {
+    clone.quality.qualityProfileVersion = QUALITY_PROFILE_VERSION;
+  }
+
+  return prepareQuestionRecordV1(clone, checkedAt);
 }
 
 export function isCanonicalQuestionRecord(value: unknown): value is QuestionRecordV1 {
