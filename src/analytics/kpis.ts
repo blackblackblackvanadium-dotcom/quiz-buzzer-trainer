@@ -1,4 +1,5 @@
 import type { Attempt } from '../domain/types';
+import { selectFirstExposureScoredAttempts } from './firstExposure';
 
 export interface Phase1Kpis {
   readonly scoredAttempts: number;
@@ -28,12 +29,7 @@ export function calculatePhase1Kpis(attempts: readonly Attempt[]): Phase1Kpis {
   const correct = scored.filter((attempt) => attempt.outcome === 'correct');
   const incorrect = scored.filter((attempt) => attempt.outcome === 'incorrect');
 
-  const firstByQuestionRevision = new Map<string, Attempt>();
-  for (const attempt of [...scored].sort((a, b) => a.completedAt.localeCompare(b.completedAt))) {
-    const key = `${attempt.questionId}::${attempt.revisionId}`;
-    if (!firstByQuestionRevision.has(key)) firstByQuestionRevision.set(key, attempt);
-  }
-  const firstExposure = [...firstByQuestionRevision.values()];
+  const firstExposure = selectFirstExposureScoredAttempts(attempts);
   const firstCorrect = firstExposure.filter((attempt) => attempt.outcome === 'correct').length;
 
   return {
