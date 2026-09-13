@@ -13,7 +13,6 @@ interface PlayPageProps {
   readonly onSessionEnd: () => void;
 }
 
-
 const EMPTY_READER: TypewriterSnapshot = {
   committedCount: 0,
   totalGraphemeCount: 0,
@@ -36,7 +35,6 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
   const [error, setError] = useState<string | null>(null);
 
   const engineRef = useRef<TypewriterEngine | null>(null);
-  const answerStartedAtRef = useRef<number | null>(null);
   const questionStartedAtRef = useRef<string>('');
   const sessionIdRef = useRef<SessionId>(randomId('session'));
 
@@ -86,7 +84,6 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
         text: question.prompt,
         complete: true,
       });
-      answerStartedAtRef.current = performance.now();
       return;
     }
 
@@ -99,7 +96,6 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     if (phase !== 'reading' || engineRef.current === null) return;
     const snapshot = engineRef.current.buzz();
     setBuzz(snapshot);
-    answerStartedAtRef.current = performance.now();
     setPhase(transitionPhase(phase, 'BUZZ', mode));
   }, [mode, phase]);
 
@@ -118,7 +114,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
       startedAt: questionStartedAtRef.current || completedAt,
       completedAt,
       buzz,
-      responseTimeMs: answerStartedAtRef.current === null ? null : performance.now() - answerStartedAtRef.current,
+      responseTimeMs: null,
     });
     await new AttemptRepository().add(attempt);
     setLastAttempt(attempt);
@@ -127,9 +123,24 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
 
   const submitAnswer = useCallback(async () => {
     if (question === null || phase !== 'answering') return;
+
+    let responseTimeMs: number | null = null;
+    if (capability.requiresBuzz) {
+      const engine = engineRef.current;
+      if (engine === null) {
+        setError('回答時間を確定するクイズエンジンがありません。');
+        return;
+      }
+      try {
+        responseTimeMs = engine.confirmAnswerSubmit();
+      } catch (reason: unknown) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+        return;
+      }
+    }
+
     const judged = judgeAnswer(question, answer);
     const completedAt = new Date().toISOString();
-    const responseTimeMs = answerStartedAtRef.current === null ? null : performance.now() - answerStartedAtRef.current;
     const attempt = createAttempt({
       attemptId: randomId('attempt'),
       question,
@@ -154,7 +165,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
 
     setLastAttempt(attempt);
     setPhase(transitionPhase(phase, 'SUBMIT', mode));
-  }, [answer, buzz, mode, phase, question]);
+  }, [answer, buzz, capability.requiresBuzz, mode, phase, question]);
 
   const next = useCallback(() => {
     if (phase !== 'result') return;
