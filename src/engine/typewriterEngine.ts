@@ -60,6 +60,9 @@ export class TypewriterEngine {
       return;
     }
 
+    // DEC-005: entering READING and presenting the first grapheme share the
+    // same start point. Only subsequent graphemes wait for intervalMs.
+    this.commitOne();
     this.scheduleNextCommit();
   }
 
