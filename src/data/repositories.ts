@@ -2,6 +2,16 @@ import type { Attempt, QuestionRevision, QuizMode, QuizSession, StudyState } fro
 import { questionKey } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
 
+function assertInputRevisionUniqueness(questions: readonly QuestionRevision[]): void {
+  const keys = questions.map(questionKey);
+  if (new Set(keys).size !== keys.length) throw new Error('Question batch contains duplicate question revisions');
+
+  const numericRevisions = questions.map((question) => `${question.questionId}::revision:${question.revision}`);
+  if (new Set(numericRevisions).size !== numericRevisions.length) {
+    throw new Error('Question batch contains duplicate numeric revisions for one questionId');
+  }
+}
+
 export class QuestionRepository {
   constructor(private readonly database: QbtDatabase = db) {}
 
@@ -10,21 +20,34 @@ export class QuestionRepository {
     return records.map(({ key: _key, ...question }: QuestionRecord) => question);
   }
 
-  /**
-   * Question revisions are immutable. A previously stored questionId+revisionId
-   * can never be replaced; updates must create a new revisionId.
-   */
+  /** Existing question revisions are immutable. New revisionIds and revision numbers are append-only. */
   async putMany(questions: readonly QuestionRevision[]): Promise<void> {
+    assertInputRevisionUniqueness(questions);
     const keys = questions.map(questionKey);
-    if (new Set(keys).size !== keys.length) throw new Error('Question batch contains duplicate question revisions');
     const records = questions.map(toQuestionRecord);
+    const questionIds = [...new Set(questions.map((question) => question.questionId))];
 
     await this.database.transaction('rw', this.database.questions, async () => {
-      const existing = await this.database.questions.bulkGet(keys);
-      const collisionIndex = existing.findIndex((record) => record !== undefined);
+      const existingByKey = await this.database.questions.bulkGet(keys);
+      const collisionIndex = existingByKey.findIndex((record) => record !== undefined);
       if (collisionIndex >= 0) {
         throw new Error(`Question revision is immutable and already exists: ${keys[collisionIndex]}`);
       }
+
+      const existingForLogicalQuestions = questionIds.length === 0
+        ? []
+        : await this.database.questions.where('questionId').anyOf(questionIds).toArray();
+      const numericCollision = questions.find((incoming) =>
+        existingForLogicalQuestions.some((existing) =>
+          existing.questionId === incoming.questionId && existing.revision === incoming.revision,
+        ),
+      );
+      if (numericCollision !== undefined) {
+        throw new Error(
+          `Question numeric revision already exists: ${numericCollision.questionId} revision ${numericCollision.revision}`,
+        );
+      }
+
       await this.database.questions.bulkAdd(records);
     });
   }
