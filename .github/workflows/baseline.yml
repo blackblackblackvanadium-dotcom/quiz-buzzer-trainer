@@ -79,3 +79,4 @@ jobs:
             baseline-results/**
             baseline-artifacts/**
             baseline-test-results/**
+            dist/**
