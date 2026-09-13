@@ -80,6 +80,23 @@ describe('Question dataset import modes', () => {
     expect(stored[0]?.quality.status).toBe('warning');
   });
 
+  it('blocks an error-severity quality issue before any DB commit', async () => {
+    const database = createDatabase('qbt-import-quality-error');
+    const invalidQuality = makeQuestionV1({
+      questionId: 'q',
+      revisionId: 'r1',
+      revision: 1,
+      quality: {
+        status: 'error',
+        issues: [{ code: 'authoritative_error', severity: 'error', message: 'Do not import.' }],
+        qualityProfileVersion: 'qbt-quality-v1',
+      },
+    });
+
+    await expect(importQuestionDataset(dataset([invalidQuality]), 'insert_only', database, CHECKED_AT)).rejects.toThrow('quality error');
+    expect(await database.questions.count()).toBe(0);
+  });
+
   it('insert_only rejects an existing immutable revision without changing stored data', async () => {
     const database = createDatabase('qbt-import-insert-conflict');
     const repository = new QuestionRepository(database);
