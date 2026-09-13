@@ -1,11 +1,11 @@
 import type {
-  Attempt,
   AttemptId,
   AttemptOutcome,
   BuzzSnapshot,
   JudgeResult,
   KimariMetrics,
   KimariReference,
+  PersistedAttempt,
   QuestionRevision,
   QuizMode,
   SessionId,
@@ -53,7 +53,7 @@ function buildKimariMetrics(
   };
 }
 
-export function createAttempt(input: CreateAttemptInput): Attempt {
+export function createAttempt(input: CreateAttemptInput): PersistedAttempt {
   const startedAtEpochMs = toEpochMs(input.startedAt, 'startedAt');
   const completedAtEpochMs = toEpochMs(input.completedAt, 'completedAt');
   if (completedAtEpochMs < startedAtEpochMs) throw new Error('completedAt must not precede startedAt');
@@ -74,7 +74,6 @@ export function createAttempt(input: CreateAttemptInput): Attempt {
     buzzTimeMs: input.buzz?.buzzTimeMs ?? null,
     responseTimeMs: input.responseTimeMs,
     kimari: buildKimariMetrics(input.mode, input.kimariReference, input.buzz),
-
     judgeKind: input.judge?.kind ?? null,
     submittedAnswer: input.submittedAnswer,
     startedAt: input.startedAt,
