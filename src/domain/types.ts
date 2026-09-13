@@ -238,32 +238,88 @@ export interface JudgeResult {
   readonly matchedAnswer: string | null;
 }
 
-export type AttemptOutcome = 'correct' | 'incorrect' | 'pass' | 'skip';
+export interface KimariReference {
+  readonly questionId: QuestionId;
+  readonly revisionId: RevisionId;
+  readonly referenceBuzzIndex: number;
+}
 
-export interface Attempt {
+export interface KimariMetrics {
+  readonly referenceBuzzIndex: number;
+  readonly playerBuzzIndex: number | null;
+  readonly deltaGraphemes: number | null;
+}
+
+export type AttemptOutcome = 'correct' | 'incorrect' | 'pass' | 'skip' | 'aborted';
+
+/** QBT-03 persisted Attempt contract plus retained presentation/audit aliases used by Phase 1 UI/analytics. */
+export interface PersistedAttempt {
   readonly attemptId: AttemptId;
   readonly questionId: QuestionId;
   readonly revisionId: RevisionId;
   readonly sessionId: SessionId;
   readonly mode: QuizMode;
   readonly outcome: AttemptOutcome;
+  readonly isCorrect: boolean | null;
+  readonly startedAtEpochMs: number;
+  readonly completedAtEpochMs: number;
+  readonly buzzIndex: number | null;
+  readonly totalGraphemeCount: number | null;
+  readonly buzzRatio: number | null;
+  readonly buzzTimeMs: number | null;
+  readonly responseTimeMs: number | null;
+  readonly kimari: KimariMetrics | null;
+
   readonly judgeKind: JudgeKind | null;
   readonly submittedAnswer: string | null;
   readonly startedAt: string;
   readonly completedAt: string;
-  readonly buzzIndex: number | null;
-  readonly buzzRatio: number | null;
-  readonly buzzTimeMs: number | null;
-  readonly responseTimeMs: number | null;
   readonly visibleTextAtBuzz: string | null;
 }
 
-export interface QuizSession {
+export type Attempt = PersistedAttempt;
+
+export type SessionEndReason =
+  | 'completed'
+  | 'survival_failed'
+  | 'survival_cleared'
+  | 'user_ended'
+  | 'fatal_error';
+
+export interface SurvivalFailure {
+  readonly failedAttemptId: AttemptId;
+  readonly cause: 'incorrect' | 'pass';
+}
+
+export interface KimariSessionResult {
+  readonly mode: 'kimari';
+}
+
+export interface SurvivalSessionResult {
+  readonly mode: 'survival';
+  readonly score: number;
+  readonly cleared: boolean;
+  readonly failure: SurvivalFailure | null;
+}
+
+export type SessionModeResult = KimariSessionResult | SurvivalSessionResult | null;
+
+/** QBT-03 persisted Session contract plus retained ISO aliases used by Phase 1 backup/UI. */
+export interface PersistedSession {
   readonly sessionId: SessionId;
   readonly mode: QuizMode;
+  readonly startedAtEpochMs: number;
+  readonly endedAtEpochMs: number | null;
+  readonly endReason: SessionEndReason | null;
+  readonly targetQuestionCount: number;
+  readonly consumedQuestionCount: number;
+  readonly modeResult: SessionModeResult;
+
   readonly startedAt: string;
   readonly endedAt: string | null;
 }
+
+export type QuizSession = PersistedSession;
 
 export interface StudyState {
   readonly questionId: QuestionId;
