@@ -1,15 +1,16 @@
-import { QUESTION_SCHEMA_VERSION, type QuestionRevision } from '../domain/types';
+import {
+  QUESTION_SCHEMA_VERSION,
+  QUALITY_PROFILE_VERSION,
+  type QuestionRevision,
+} from '../domain/types';
+import { computeDerivedQuestionData } from './questionIntegrity';
 
 const CREATED_AT = '2026-09-13T00:00:00.000Z';
 const provenance = {
-  method: 'seed',
+  method: 'human_unverified' as const,
   generator: 'quiz-buzzer-trainer',
-  generatorVersion: 'seed-v1',
+  generatorVersion: 'seed-v2',
 } as const;
-
-function graphemeCount(text: string): number {
-  return Array.from(new Intl.Segmenter('ja', { granularity: 'grapheme' }).segment(text)).length;
-}
 
 function makeSeedQuestion(input: {
   questionId: string;
@@ -23,7 +24,6 @@ function makeSeedQuestion(input: {
   tags: readonly string[];
   determiningPoints?: readonly { id: string; requiredPrefixGraphemes: number }[];
 }): QuestionRevision {
-  const count = graphemeCount(input.prompt);
   return {
     schemaVersion: QUESTION_SCHEMA_VERSION,
     questionId: input.questionId,
@@ -57,19 +57,12 @@ function makeSeedQuestion(input: {
       provenance,
     })),
     sources: [],
-    derived: {
-      graphemeCount: count,
-      graphemeProfile: 'Intl.Segmenter:ja:grapheme',
-      exactTextHash: `seed:${input.questionId}:r1`,
-      duplicateDetectionKey: input.prompt.normalize('NFKC'),
-      computedAt: CREATED_AT,
-      generatorVersion: 'seed-v1',
-    },
+    derived: computeDerivedQuestionData(input.prompt, CREATED_AT),
     quality: {
       status: 'valid',
       issues: [],
       lastCheckedAt: CREATED_AT,
-      qualityProfileVersion: 'seed-v1',
+      qualityProfileVersion: QUALITY_PROFILE_VERSION,
     },
     metadata: {
       createdAt: CREATED_AT,
