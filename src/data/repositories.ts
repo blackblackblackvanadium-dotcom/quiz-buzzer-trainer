@@ -6,6 +6,11 @@ function assertInputRevisionUniqueness(questions: readonly QuestionRevision[]): 
   const keys = questions.map(questionKey);
   if (new Set(keys).size !== keys.length) throw new Error('Question batch contains duplicate question revisions');
 
+  const revisionIds = questions.map((question) => question.revisionId);
+  if (new Set(revisionIds).size !== revisionIds.length) {
+    throw new Error('Question batch contains duplicate revisionId values');
+  }
+
   const numericRevisions = questions.map((question) => `${question.questionId}::revision:${question.revision}`);
   if (new Set(numericRevisions).size !== numericRevisions.length) {
     throw new Error('Question batch contains duplicate numeric revisions for one questionId');
@@ -24,6 +29,7 @@ export class QuestionRepository {
   async putMany(questions: readonly QuestionRevision[]): Promise<void> {
     assertInputRevisionUniqueness(questions);
     const keys = questions.map(questionKey);
+    const revisionIds = questions.map((question) => question.revisionId);
     const records = questions.map(toQuestionRecord);
     const questionIds = [...new Set(questions.map((question) => question.questionId))];
 
@@ -32,6 +38,13 @@ export class QuestionRepository {
       const collisionIndex = existingByKey.findIndex((record) => record !== undefined);
       if (collisionIndex >= 0) {
         throw new Error(`Question revision is immutable and already exists: ${keys[collisionIndex]}`);
+      }
+
+      const revisionIdCollision = revisionIds.length === 0
+        ? undefined
+        : await this.database.questions.where('revisionId').anyOf(revisionIds).first();
+      if (revisionIdCollision !== undefined) {
+        throw new Error(`Question revisionId must be globally unique: ${revisionIdCollision.revisionId}`);
       }
 
       const existingForLogicalQuestions = questionIds.length === 0
