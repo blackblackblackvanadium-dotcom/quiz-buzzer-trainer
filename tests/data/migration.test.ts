@@ -124,4 +124,20 @@ describe('DB schema migration', () => {
     await expect(upgraded.open()).rejects.toThrow('forbidden control character');
     upgraded.close();
   });
+
+  it('aborts migration when two legacy revisionIds map to the same numeric revision', async () => {
+    const name = 'qbt-migration-numeric-revision-collision';
+    databaseNames.push(name);
+    const legacy = new LegacyDatabase(name);
+    await legacy.open();
+    await legacy.questions.bulkAdd([
+      legacyQuestion({ key: 'q::legacy-a', revisionId: 'legacy-a' }),
+      legacyQuestion({ key: 'q::legacy-b', revisionId: 'legacy-b' }),
+    ]);
+    legacy.close();
+
+    const upgraded = new QbtDatabase(name);
+    await expect(upgraded.open()).rejects.toThrow('numeric revision collision');
+    upgraded.close();
+  });
 });
