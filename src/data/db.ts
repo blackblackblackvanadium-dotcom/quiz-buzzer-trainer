@@ -30,10 +30,8 @@ const DB_V2_STORES = {
   settings: '&key',
 } as const;
 
-const DB_V3_STORES = {
-  ...DB_V2_STORES,
-  questions: '&key, &revisionId, questionId, revision, classification.genre.primary, metadata.status',
-} as const;
+// v3 changes DATA conformance, not identity: revisionId remains scoped by questionId.
+const DB_V3_STORES = DB_V2_STORES;
 
 export class QbtDatabase extends Dexie {
   questions!: Table<QuestionRecord, string>;
@@ -60,6 +58,7 @@ export class QbtDatabase extends Dexie {
         await verifyQuestionTable(transaction);
       });
 
+    // Required because main had already shipped DB v2 before the final QBT-02 conformance pass.
     this.version(DB_SCHEMA_VERSION)
       .stores(DB_V3_STORES)
       .upgrade(async (transaction) => {
@@ -82,16 +81,11 @@ function replaceStoredQuestion(record: Record<string, unknown>, question: Questi
 
 async function verifyQuestionTable(transaction: Transaction): Promise<void> {
   const records = await transaction.table('questions').toArray() as QuestionRecord[];
-  const revisionIds = new Set<string>();
   const numericRevisions = new Set<string>();
 
   for (const record of records) {
     const expectedKey = questionKey(record);
     if (record.key !== expectedKey) throw new Error(`Migrated Question key mismatch: expected ${expectedKey}`);
-    if (revisionIds.has(record.revisionId)) {
-      throw new Error(`Migrated Question revisionId collision: ${record.revisionId}`);
-    }
-    revisionIds.add(record.revisionId);
 
     const numericKey = `${record.questionId}::revision:${record.revision}`;
     if (numericRevisions.has(numericKey)) {
