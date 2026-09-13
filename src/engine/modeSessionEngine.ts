@@ -1,6 +1,6 @@
 import type {
-  Attempt,
   KimariSessionResult,
+  PersistedAttempt,
   QuizMode,
   SessionEndReason,
   SessionModeResult,
@@ -54,13 +54,13 @@ function assertActive(state: ModeSessionState): void {
   }
 }
 
-function assertAttemptBelongsToMode(state: ModeSessionState, attempt: Attempt): void {
+function assertAttemptBelongsToMode(state: ModeSessionState, attempt: PersistedAttempt): void {
   if (attempt.mode !== state.mode) throw new Error(`Attempt mode ${attempt.mode} does not match session mode ${state.mode}`);
   if (attempt.outcome === 'aborted') throw new Error('aborted Attempt is only valid for explicit session termination');
   if (state.mode === 'kimari' && attempt.kimari === null) throw new Error('Kimari Attempt requires persisted Kimari metrics');
 }
 
-function resolveKimari(state: ModeSessionState, attempt: Attempt): ModeResolution {
+function resolveKimari(state: ModeSessionState, _attempt: PersistedAttempt): ModeResolution {
   const consumedQuestionCount = state.consumedQuestionCount + 1;
   if (consumedQuestionCount === state.targetQuestionCount) {
     const modeResult: KimariSessionResult = { mode: 'kimari' };
@@ -80,7 +80,7 @@ function resolveKimari(state: ModeSessionState, attempt: Attempt): ModeResolutio
   };
 }
 
-function resolveSurvival(state: ModeSessionState, attempt: Attempt): ModeResolution {
+function resolveSurvival(state: ModeSessionState, attempt: PersistedAttempt): ModeResolution {
   if (attempt.outcome === 'skip') throw new Error('Skip is forbidden in Survival');
 
   const consumedQuestionCount = state.consumedQuestionCount + 1;
@@ -147,7 +147,7 @@ function resolveSurvival(state: ModeSessionState, attempt: Attempt): ModeResolut
   };
 }
 
-export function resolveModeAttempt(state: ModeSessionState, attempt: Attempt): ModeResolution {
+export function resolveModeAttempt(state: ModeSessionState, attempt: PersistedAttempt): ModeResolution {
   assertActive(state);
   assertAttemptBelongsToMode(state, attempt);
   return state.mode === 'kimari' ? resolveKimari(state, attempt) : resolveSurvival(state, attempt);
