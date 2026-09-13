@@ -76,8 +76,12 @@ export class SessionRepository {
     await this.database.sessions.add(session);
   }
 
-  async end(sessionId: string, endedAt: string): Promise<void> {
-    await this.database.sessions.update(sessionId, { endedAt });
+  async put(session: QuizSession): Promise<void> {
+    await this.database.sessions.put(session);
+  }
+
+  async get(sessionId: string): Promise<QuizSession | undefined> {
+    return this.database.sessions.get(sessionId);
   }
 }
 
@@ -108,6 +112,20 @@ export async function persistAttemptTransaction(
 ): Promise<void> {
   await database.transaction('rw', database.attempts, database.studyStates, async () => {
     await database.attempts.add(attempt);
+    if (studyState !== null) await database.studyStates.put(studyState);
+  });
+}
+
+/** P0 #4: a resolved Attempt and its Session progress/end state commit together. */
+export async function persistAttemptAndSessionTransaction(
+  attempt: Attempt,
+  session: QuizSession,
+  studyState: StudyState | null = null,
+  database: QbtDatabase = db,
+): Promise<void> {
+  await database.transaction('rw', database.attempts, database.sessions, database.studyStates, async () => {
+    await database.attempts.add(attempt);
+    await database.sessions.put(session);
     if (studyState !== null) await database.studyStates.put(studyState);
   });
 }
