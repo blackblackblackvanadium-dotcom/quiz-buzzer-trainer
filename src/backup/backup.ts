@@ -1,6 +1,7 @@
 import type { AppSetting, Attempt, QuestionRevision, QuizSession, StudyState } from '../domain/types';
 import { DB_SCHEMA_VERSION, db, type QbtDatabase, type QuestionRecord, toQuestionRecord } from '../data/db';
-import { parsePortableBackup, type PortableBackupV1 } from '../data/validation';
+import type { PortableBackupV1 } from '../data/validation';
+import { parseCompatiblePortableBackup } from './backupCodec';
 
 export const APP_VERSION = '0.1.0';
 export const QUESTION_DATA_VERSION = 'seed-v1';
@@ -30,10 +31,10 @@ export function serializeBackup(backup: PortableBackupV1): string {
 }
 
 export function parseBackupJson(text: string): PortableBackupV1 {
-  return parsePortableBackup(JSON.parse(text) as unknown);
+  return parseCompatiblePortableBackup(JSON.parse(text) as unknown);
 }
 
-/** Replace Restore only. Validation happens before this function is called. */
+/** Replace Restore only. The compatible parser validates and normalizes before this mutation. */
 export async function replaceRestore(
   backup: PortableBackupV1,
   database: QbtDatabase = db,
