@@ -29,6 +29,8 @@ export class TypewriterEngine {
 
   private committedCount = 0;
   private startedAtMs: number | null = null;
+  private buzzAcceptedAtMs: number | null = null;
+  private answerSubmittedAtMs: number | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private paused = true;
   private onCommit: ((snapshot: TypewriterSnapshot) => void) | null = null;
@@ -79,17 +81,22 @@ export class TypewriterEngine {
    * BUZZ is based only on graphemes that were actually committed before the
    * BUZZ handler entered this method. Scheduled/due-but-not-executed timer
    * callbacks never advance the presentation and are never caught up here.
+   * The accepted BUZZ time also becomes the sole response-time origin.
    */
   buzz(buzzAtMs = this.clock.now()): BuzzSnapshot {
     const startedAtMs = this.startedAtMs;
     if (startedAtMs === null) {
       throw new Error('Cannot BUZZ before reading starts');
     }
+    if (this.buzzAcceptedAtMs !== null) {
+      throw new Error('BUZZ has already been accepted');
+    }
 
     // Freeze presentation first. JavaScript executes this synchronously, so a
     // stale timer callback that runs later observes paused=true and cannot
     // commit another grapheme.
     this.pause();
+    this.buzzAcceptedAtMs = buzzAtMs;
 
     const totalGraphemeCount = this.graphemes.length;
     const buzzIndex = this.committedCount;
@@ -101,6 +108,29 @@ export class TypewriterEngine {
       buzzTimeMs: Math.max(0, buzzAtMs - startedAtMs),
       buzzAtMs,
     };
+  }
+
+  /**
+   * Confirm answer submission using the same monotonic clock that accepted
+   * BUZZ. UI code receives only the finalized duration; it never computes a
+   * performance.now() delta itself.
+   */
+  confirmAnswerSubmit(): number {
+    const buzzAcceptedAtMs = this.buzzAcceptedAtMs;
+    if (buzzAcceptedAtMs === null) {
+      throw new Error('Cannot submit an answer before BUZZ is accepted');
+    }
+    if (this.answerSubmittedAtMs !== null) {
+      throw new Error('Answer submission has already been confirmed');
+    }
+
+    const submitAtMs = this.clock.now();
+    if (submitAtMs < buzzAcceptedAtMs) {
+      throw new Error('Monotonic clock moved backwards after BUZZ');
+    }
+
+    this.answerSubmittedAtMs = submitAtMs;
+    return submitAtMs - buzzAcceptedAtMs;
   }
 
   /**
