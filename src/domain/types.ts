@@ -29,21 +29,21 @@ export type RejectionReason =
 
 export interface Provenance {
   readonly method: string;
-  readonly confidence?: number;
-  readonly verifiedBy?: string;
-  readonly verifiedAt?: string;
-  readonly generator?: string;
-  readonly generatorVersion?: string;
-  readonly sourceIds?: readonly string[];
-  readonly note?: string;
+  readonly confidence?: number | undefined;
+  readonly verifiedBy?: string | undefined;
+  readonly verifiedAt?: string | undefined;
+  readonly generator?: string | undefined;
+  readonly generatorVersion?: string | undefined;
+  readonly sourceIds?: readonly string[] | undefined;
+  readonly note?: string | undefined;
 }
 
 export interface AnswerEntry {
   readonly id: string;
   readonly text: string;
-  readonly reading?: string;
-  readonly relation?: AnswerRelation;
-  readonly note?: string;
+  readonly reading?: string | undefined;
+  readonly relation?: AnswerRelation | undefined;
+  readonly note?: string | undefined;
   readonly provenance: Provenance;
 }
 
@@ -53,7 +53,7 @@ export interface RejectedAnswerEntry extends AnswerEntry {
 
 export interface GenreInfo {
   readonly primary: string;
-  readonly secondary?: readonly string[];
+  readonly secondary?: readonly string[] | undefined;
   readonly taxonomyVersion: string;
   readonly provenance: Provenance;
 }
@@ -84,10 +84,10 @@ export interface DeterminingPoint {
   readonly id: string;
   readonly method: DeterminingPointMethod;
   readonly requiredPrefixGraphemes: number;
-  readonly confidence?: number;
-  readonly datasetScopeId?: string;
+  readonly confidence?: number | undefined;
+  readonly datasetScopeId?: string | undefined;
   readonly provenance: Provenance;
-  readonly note?: string;
+  readonly note?: string | undefined;
 }
 
 export type SourceRole =
@@ -100,11 +100,11 @@ export type SourceRole =
 export interface SourceReference {
   readonly id: string;
   readonly role: SourceRole;
-  readonly title?: string;
-  readonly url?: string;
-  readonly publisher?: string;
-  readonly accessedAt?: string;
-  readonly note?: string;
+  readonly title?: string | undefined;
+  readonly url?: string | undefined;
+  readonly publisher?: string | undefined;
+  readonly accessedAt?: string | undefined;
+  readonly note?: string | undefined;
 }
 
 export interface DerivedQuestionData {
@@ -123,14 +123,14 @@ export interface QualityIssue {
   readonly code: string;
   readonly severity: QualityIssueSeverity;
   readonly message: string;
-  readonly field?: string;
+  readonly field?: string | undefined;
 }
 
 export interface QualityInfo {
   readonly status: QualityStatus;
   readonly issues: readonly QualityIssue[];
-  readonly lastCheckedAt?: string;
-  readonly qualityProfileVersion?: string;
+  readonly lastCheckedAt?: string | undefined;
+  readonly qualityProfileVersion?: string | undefined;
 }
 
 export type QuestionStatus = 'draft' | 'active' | 'suspended' | 'deprecated';
@@ -138,10 +138,10 @@ export type QuestionStatus = 'draft' | 'active' | 'suspended' | 'deprecated';
 export interface QuestionMetadata {
   readonly createdAt: string;
   readonly updatedAt: string;
-  readonly createdBy?: string;
-  readonly updatedBy?: string;
-  readonly importedAt?: string;
-  readonly importBatchId?: string;
+  readonly createdBy?: string | undefined;
+  readonly updatedBy?: string | undefined;
+  readonly importedAt?: string | undefined;
+  readonly importBatchId?: string | undefined;
   readonly status: QuestionStatus;
 }
 
@@ -158,16 +158,16 @@ export interface QuestionRecordV1 {
   };
   readonly classification: {
     readonly genre: GenreInfo;
-    readonly questionType?: QuestionTypeInfo;
+    readonly questionType?: QuestionTypeInfo | undefined;
     readonly tags: readonly TagRef[];
-    readonly difficulty?: DifficultyInfo;
+    readonly difficulty?: DifficultyInfo | undefined;
   };
   readonly determiningPoints: readonly DeterminingPoint[];
   readonly sources: readonly SourceReference[];
   readonly derived: DerivedQuestionData;
   readonly quality: QualityInfo;
   readonly metadata: QuestionMetadata;
-  readonly extensions?: Readonly<Record<string, unknown>>;
+  readonly extensions?: Readonly<Record<string, unknown>> | undefined;
 }
 
 /** Compatibility name used by the application layer; the canonical shape is QuestionRecordV1. */
@@ -184,7 +184,7 @@ export interface QuestionDatasetV1 {
     readonly version: string;
   };
   readonly questions: readonly QuestionRecordV1[];
-  readonly checksum?: string;
+  readonly checksum?: string | undefined;
 }
 
 export const quizModes = ['normal', 'kimari', 'review', 'survival', 'study'] as const;
