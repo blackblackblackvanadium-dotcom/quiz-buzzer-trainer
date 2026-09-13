@@ -12,6 +12,7 @@ afterEach(async () => {
 });
 
 async function seedSingleQuestion(prompt = 'abcd', primaryAnswer = 'Answer'): Promise<void> {
+  await db.open();
   const base = makeQuestionV1({ questionId: 'ui-q', revisionId: 'r1', revision: 1, prompt });
   const question = {
     ...base,
