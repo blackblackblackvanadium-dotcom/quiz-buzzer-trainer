@@ -252,32 +252,38 @@ export interface KimariMetrics {
 
 export type AttemptOutcome = 'correct' | 'incorrect' | 'pass' | 'skip' | 'aborted';
 
-/** QBT-03 persisted Attempt contract plus retained presentation/audit aliases used by Phase 1 UI/analytics. */
-export interface PersistedAttempt {
+interface AttemptCommon {
   readonly attemptId: AttemptId;
   readonly questionId: QuestionId;
   readonly revisionId: RevisionId;
   readonly sessionId: SessionId;
   readonly mode: QuizMode;
   readonly outcome: AttemptOutcome;
-  readonly isCorrect: boolean | null;
-  readonly startedAtEpochMs: number;
-  readonly completedAtEpochMs: number;
-  readonly buzzIndex: number | null;
-  readonly totalGraphemeCount: number | null;
-  readonly buzzRatio: number | null;
-  readonly buzzTimeMs: number | null;
-  readonly responseTimeMs: number | null;
-  readonly kimari: KimariMetrics | null;
-
   readonly judgeKind: JudgeKind | null;
   readonly submittedAnswer: string | null;
   readonly startedAt: string;
   readonly completedAt: string;
+  readonly buzzIndex: number | null;
+  readonly buzzRatio: number | null;
+  readonly buzzTimeMs: number | null;
+  readonly responseTimeMs: number | null;
   readonly visibleTextAtBuzz: string | null;
 }
 
-export type Attempt = PersistedAttempt;
+/** Pre-P0 #4 historical payload. Read/migration compatible only; never emitted by the current ENGINE. */
+export interface LegacyAttempt extends AttemptCommon {}
+
+/** QBT-03 persisted Attempt contract plus retained presentation/audit aliases used by Phase 1 UI/analytics. */
+export interface PersistedAttempt extends AttemptCommon {
+  readonly isCorrect: boolean | null;
+  readonly startedAtEpochMs: number;
+  readonly completedAtEpochMs: number;
+  readonly totalGraphemeCount: number | null;
+  readonly kimari: KimariMetrics | null;
+}
+
+/** DB/history read union. All new APP writes must use PersistedAttempt. */
+export type Attempt = PersistedAttempt | LegacyAttempt;
 
 export type SessionEndReason =
   | 'completed'
@@ -314,7 +320,6 @@ export interface PersistedSession {
   readonly targetQuestionCount: number;
   readonly consumedQuestionCount: number;
   readonly modeResult: SessionModeResult;
-
   readonly startedAt: string;
   readonly endedAt: string | null;
 }
