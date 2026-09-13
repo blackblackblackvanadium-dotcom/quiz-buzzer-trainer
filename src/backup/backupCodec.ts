@@ -5,6 +5,7 @@ import type {
   QuizSession,
   SessionEndReason,
   SessionModeResult,
+  SurvivalFailure,
 } from '../domain/types';
 import { parsePortableBackup, type PortableBackupV1 } from '../data/validation';
 
@@ -161,12 +162,12 @@ function parseModeResult(value: unknown, label: string): SessionModeResult {
   const score = finiteNumber(record.score, `${label}.score`);
   if (!Number.isInteger(score) || score < 0) throw new Error(`${label}.score is invalid`);
   if (typeof record.cleared !== 'boolean') throw new Error(`${label}.cleared must be boolean`);
-  let failure = null;
+  let failure: SurvivalFailure | null = null;
   if (record.failure !== null) {
     const failureRecord = requireRecord(record.failure, `${label}.failure`);
     if (typeof failureRecord.failedAttemptId !== 'string' || failureRecord.failedAttemptId.length === 0) throw new Error(`${label}.failure.failedAttemptId is invalid`);
     if (failureRecord.cause !== 'incorrect' && failureRecord.cause !== 'pass') throw new Error(`${label}.failure.cause is invalid`);
-    failure = { failedAttemptId: failureRecord.failedAttemptId, cause: failureRecord.cause } as const;
+    failure = { failedAttemptId: failureRecord.failedAttemptId, cause: failureRecord.cause };
   }
   if (record.cleared === true && failure !== null) throw new Error(`${label} cleared result cannot contain failure`);
   return { mode: 'survival', score, cleared: record.cleared, failure };
@@ -201,7 +202,6 @@ function normalizeSession(rawValue: unknown, legacyValidated: PortableBackupV1['
   };
 }
 
-/** Strict envelope/question/common-field validation plus P0 #4 persistence normalization. */
 export function parseCompatiblePortableBackup(value: unknown): PortableBackupV1 {
   const projected = projectForLegacyValidation(value);
   const validated = parsePortableBackup(projected);
