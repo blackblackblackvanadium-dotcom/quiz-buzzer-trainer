@@ -13,36 +13,36 @@ export function normalizeAnswer(value: string): string {
 export function judgeAnswer(question: QuestionRevision, submitted: string): JudgeResult {
   const normalizedSubmitted = normalizeAnswer(submitted);
 
-  const rejected = question.rejectedAnswers.find(
-    (answer) => normalizeAnswer(answer) === normalizedSubmitted,
+  const rejected = question.answers.rejectedAnswers.find(
+    (answer) => normalizeAnswer(answer.text) === normalizedSubmitted,
   );
   if (rejected !== undefined) {
     return {
       kind: 'rejected',
       isCorrect: false,
       normalizedSubmitted,
-      matchedAnswer: rejected,
+      matchedAnswer: rejected.text,
     };
   }
 
-  if (normalizeAnswer(question.canonicalAnswer) === normalizedSubmitted) {
+  if (normalizeAnswer(question.answers.primaryAnswer.text) === normalizedSubmitted) {
     return {
       kind: 'canonical',
       isCorrect: true,
       normalizedSubmitted,
-      matchedAnswer: question.canonicalAnswer,
+      matchedAnswer: question.answers.primaryAnswer.text,
     };
   }
 
-  const acceptable = question.acceptableAnswers.find(
-    (answer) => normalizeAnswer(answer) === normalizedSubmitted,
+  const acceptable = question.answers.acceptedAnswers.find(
+    (answer) => normalizeAnswer(answer.text) === normalizedSubmitted,
   );
   if (acceptable !== undefined) {
     return {
       kind: 'acceptable',
       isCorrect: true,
       normalizedSubmitted,
-      matchedAnswer: acceptable,
+      matchedAnswer: acceptable.text,
     };
   }
 
