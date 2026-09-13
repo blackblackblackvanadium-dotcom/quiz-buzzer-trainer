@@ -40,7 +40,8 @@ export class QbtDatabase extends Dexie {
     this.version(DB_SCHEMA_VERSION)
       .stores(DB_V2_STORES)
       .upgrade(async (transaction) => {
-        await transaction.table('questions').toCollection().modify((record: Record<string, unknown>) => {
+        const questionsTable = transaction.table('questions');
+        await questionsTable.toCollection().modify((record: Record<string, unknown>) => {
           const { key: _legacyKey, ...payload } = record;
           const migrated = isCanonicalQuestionRecord(payload)
             ? prepareQuestionRecordV1(payload, extractVerificationTime(payload))
@@ -50,6 +51,18 @@ export class QbtDatabase extends Dexie {
           for (const existingKey of Object.keys(record)) delete record[existingKey];
           Object.assign(record, stored);
         });
+
+        const migratedRecords = await questionsTable.toArray() as QuestionRecord[];
+        const numericRevisions = new Set<string>();
+        for (const record of migratedRecords) {
+          const expectedKey = questionKey(record);
+          if (record.key !== expectedKey) throw new Error(`Migrated Question key mismatch: expected ${expectedKey}`);
+          const numericKey = `${record.questionId}::revision:${record.revision}`;
+          if (numericRevisions.has(numericKey)) {
+            throw new Error(`Migrated Question numeric revision collision: ${numericKey}`);
+          }
+          numericRevisions.add(numericKey);
+        }
       });
   }
 }
