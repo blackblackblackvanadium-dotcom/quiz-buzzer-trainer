@@ -1,4 +1,5 @@
 import type { Attempt, QuestionRevision, QuizMode, QuizSession, StudyState } from '../domain/types';
+import { questionKey } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
 
 export class QuestionRepository {
@@ -9,8 +10,23 @@ export class QuestionRepository {
     return records.map(({ key: _key, ...question }: QuestionRecord) => question);
   }
 
+  /**
+   * Question revisions are immutable. A previously stored questionId+revisionId
+   * can never be replaced; updates must create a new revisionId.
+   */
   async putMany(questions: readonly QuestionRevision[]): Promise<void> {
-    await this.database.questions.bulkPut(questions.map(toQuestionRecord));
+    const keys = questions.map(questionKey);
+    if (new Set(keys).size !== keys.length) throw new Error('Question batch contains duplicate question revisions');
+    const records = questions.map(toQuestionRecord);
+
+    await this.database.transaction('rw', this.database.questions, async () => {
+      const existing = await this.database.questions.bulkGet(keys);
+      const collisionIndex = existing.findIndex((record) => record !== undefined);
+      if (collisionIndex >= 0) {
+        throw new Error(`Question revision is immutable and already exists: ${keys[collisionIndex]}`);
+      }
+      await this.database.questions.bulkAdd(records);
+    });
   }
 
   async count(): Promise<number> {
