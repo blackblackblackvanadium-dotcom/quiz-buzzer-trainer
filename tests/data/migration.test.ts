@@ -1,6 +1,6 @@
 import Dexie, { type Table } from 'dexie';
 import { afterEach, describe, expect, it } from 'vitest';
-import { QUALITY_PROFILE_VERSION, type Attempt } from '../../src/domain/types';
+import { QUALITY_PROFILE_VERSION } from '../../src/domain/types';
 import { DB_SCHEMA_VERSION, QbtDatabase } from '../../src/data/db';
 import { parseQuestionRecordV1 } from '../../src/data/validation';
 import type { LegacyQuestionRecordV1 } from '../../src/data/questionMigration';
@@ -10,9 +10,35 @@ interface LegacyStoredQuestion extends LegacyQuestionRecordV1 {
   readonly key: string;
 }
 
+interface LegacyAttemptRecord {
+  readonly attemptId: string;
+  readonly questionId: string;
+  readonly revisionId: string;
+  readonly sessionId: string;
+  readonly mode: string;
+  readonly outcome: string;
+  readonly judgeKind: string | null;
+  readonly submittedAnswer: string | null;
+  readonly startedAt: string;
+  readonly completedAt: string;
+  readonly buzzIndex: number | null;
+  readonly buzzRatio: number | null;
+  readonly buzzTimeMs: number | null;
+  readonly responseTimeMs: number | null;
+  readonly visibleTextAtBuzz: string | null;
+}
+
+interface LegacySessionRecord {
+  readonly sessionId: string;
+  readonly mode: string;
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+}
+
 class LegacyDatabase extends Dexie {
   questions!: Table<LegacyStoredQuestion, string>;
-  attempts!: Table<Attempt, string>;
+  attempts!: Table<LegacyAttemptRecord, string>;
+  sessions!: Table<LegacySessionRecord, string>;
 
   constructor(name: string) {
     super(name);
@@ -28,7 +54,7 @@ class LegacyDatabase extends Dexie {
 
 class PreConformanceV2Database extends Dexie {
   questions!: Table<Record<string, unknown>, string>;
-  attempts!: Table<Attempt, string>;
+  attempts!: Table<LegacyAttemptRecord, string>;
 
   constructor(name: string) {
     super(name);
@@ -68,7 +94,7 @@ function legacyQuestion(overrides: Partial<LegacyStoredQuestion> = {}): LegacySt
   };
 }
 
-function attempt(questionId = 'q', revisionId = 'r1'): Attempt {
+function legacyAttempt(questionId = 'q', revisionId = 'r1'): LegacyAttemptRecord {
   return {
     attemptId: 'attempt-1',
     questionId,
@@ -85,6 +111,15 @@ function attempt(questionId = 'q', revisionId = 'r1'): Attempt {
     buzzTimeMs: 100,
     responseTimeMs: 300,
     visibleTextAtBuzz: 'a',
+  };
+}
+
+function legacySession(): LegacySessionRecord {
+  return {
+    sessionId: 'session-1',
+    mode: 'normal',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    endedAt: '2026-01-01T00:00:02.000Z',
   };
 }
 
@@ -125,15 +160,17 @@ function preConformanceV2Record(): Record<string, unknown> {
 }
 
 describe('DB schema migration', () => {
-  it('migrates legacy v1 questions with canonical provenance/derived/quality and preserves Attempt history', async () => {
-    const name = 'qbt-migration-v1-v3';
+  it('migrates legacy v1 questions and backfills Attempt/Session persistence without losing history', async () => {
+    const name = 'qbt-migration-v1-v4';
     databaseNames.push(name);
     const legacy = new LegacyDatabase(name);
-    const historicalAttempt = attempt();
+    const historicalAttempt = legacyAttempt();
+    const historicalSession = legacySession();
 
     await legacy.open();
     await legacy.questions.add(legacyQuestion());
     await legacy.attempts.add(historicalAttempt);
+    await legacy.sessions.add(historicalSession);
     legacy.close();
 
     const upgraded = new QbtDatabase(name);
@@ -159,17 +196,32 @@ describe('DB schema migration', () => {
     expect(parsed.derived.duplicateDetectionKey).toBe('abcd');
 
     const preservedAttempt = await upgraded.attempts.get('attempt-1');
-    expect(preservedAttempt).toEqual(historicalAttempt);
-    expect(preservedAttempt?.questionId).toBe('q');
-    expect(preservedAttempt?.revisionId).toBe('r1');
+    expect(preservedAttempt).toMatchObject({
+      ...historicalAttempt,
+      isCorrect: true,
+      startedAtEpochMs: Date.parse(historicalAttempt.startedAt),
+      completedAtEpochMs: Date.parse(historicalAttempt.completedAt),
+      totalGraphemeCount: null,
+      kimari: null,
+    });
+    const preservedSession = await upgraded.sessions.get('session-1');
+    expect(preservedSession).toMatchObject({
+      ...historicalSession,
+      startedAtEpochMs: Date.parse(historicalSession.startedAt),
+      endedAtEpochMs: Date.parse(historicalSession.endedAt!),
+      endReason: null,
+      targetQuestionCount: 0,
+      consumedQuestionCount: 0,
+      modeResult: null,
+    });
     upgraded.close();
   });
 
-  it('migrates already-deployed DB v2 residual records to canonical v3 without breaking Attempt history', async () => {
-    const name = 'qbt-migration-v2-v3';
+  it('migrates already-deployed DB v2 residual records to canonical v4 without breaking Attempt history', async () => {
+    const name = 'qbt-migration-v2-v4';
     databaseNames.push(name);
     const v2 = new PreConformanceV2Database(name);
-    const historicalAttempt = attempt();
+    const historicalAttempt = legacyAttempt();
     await v2.open();
     await v2.questions.add(preConformanceV2Record());
     await v2.attempts.add(historicalAttempt);
@@ -188,7 +240,11 @@ describe('DB schema migration', () => {
     expect(parsed.quality.qualityProfileVersion).toBe(QUALITY_PROFILE_VERSION);
     expect(parsed.derived.exactTextHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(parsed.derived.duplicateDetectionKey).toBe('abcd');
-    expect(await upgraded.attempts.get('attempt-1')).toEqual(historicalAttempt);
+    expect(await upgraded.attempts.get('attempt-1')).toMatchObject({
+      attemptId: 'attempt-1',
+      isCorrect: true,
+      kimari: null,
+    });
     upgraded.close();
   });
 
