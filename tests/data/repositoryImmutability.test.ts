@@ -41,6 +41,16 @@ describe('QuestionRepository revision immutability', () => {
     expect(stored[0]?.answers.primaryAnswer.text).toBe('Answer');
   });
 
+  it('allows the same revisionId under different questionIds because identity is composite', async () => {
+    const database = createDatabase('qbt-composite-revision-identity');
+    const repository = new QuestionRepository(database);
+    await repository.putMany([
+      makeQuestionV1({ questionId: 'q1', revisionId: 'r1', revision: 1 }),
+      makeQuestionV1({ questionId: 'q2', revisionId: 'r1', revision: 1 }),
+    ]);
+    expect(await repository.count()).toBe(2);
+  });
+
   it('allows the same logical question to be stored as a new revisionId and new revision number', async () => {
     const database = createDatabase('qbt-new-revision');
     const repository = new QuestionRepository(database);
@@ -61,7 +71,7 @@ describe('QuestionRepository revision immutability', () => {
     expect(await repository.count()).toBe(1);
   });
 
-  it('rejects duplicate revisionIds inside one input batch atomically', async () => {
+  it('rejects duplicate revisionIds for the same questionId inside one input batch atomically', async () => {
     const database = createDatabase('qbt-duplicate-batch');
     const repository = new QuestionRepository(database);
     const question = makeQuestionV1({ questionId: 'q', revisionId: 'r1', revision: 1 });
