@@ -33,20 +33,6 @@ function assertNoBlockingQualityIssues(issues: readonly QuestionImportIssue[]): 
   }
 }
 
-function assertRevisionIdOwnership(
-  incoming: readonly QuestionRecordV1[],
-  existing: readonly QuestionRecord[],
-): void {
-  const collision = incoming.find((candidate) =>
-    existing.some((stored) =>
-      stored.revisionId === candidate.revisionId && questionKey(stored) !== questionKey(candidate),
-    ),
-  );
-  if (collision !== undefined) {
-    throw new Error(`Question revisionId must be globally unique: ${collision.revisionId}`);
-  }
-}
-
 function assertNoNumericRevisionCollision(
   incoming: readonly QuestionRecordV1[],
   existing: readonly QuestionRecord[],
@@ -120,7 +106,6 @@ async function commitPreparedDataset(
     const existing = await database.questions.toArray();
     const existingByKey = new Map(existing.map((record) => [record.key, record]));
 
-    assertRevisionIdOwnership(dataset.questions, existing);
     assertNoNumericRevisionCollision(dataset.questions, existing);
 
     if (mode === 'insert_only') {
