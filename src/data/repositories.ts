@@ -1,11 +1,4 @@
-import type {
-  Attempt,
-  PersistedAttempt,
-  QuestionRevision,
-  QuizMode,
-  QuizSession,
-  StudyState,
-} from '../domain/types';
+import type { Attempt, QuestionRevision, QuizMode, QuizSession, StudyState } from '../domain/types';
 import { questionKey } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
 
@@ -27,7 +20,6 @@ export class QuestionRepository {
     return records.map(({ key: _key, ...question }: QuestionRecord) => question);
   }
 
-  /** Existing questionId+revisionId pairs are immutable; numeric revision is unique inside each questionId. */
   async putMany(questions: readonly QuestionRevision[]): Promise<void> {
     assertInputRevisionUniqueness(questions);
     const keys = questions.map(questionKey);
@@ -37,9 +29,7 @@ export class QuestionRepository {
     await this.database.transaction('rw', this.database.questions, async () => {
       const existingByKey = await this.database.questions.bulkGet(keys);
       const collisionIndex = existingByKey.findIndex((record) => record !== undefined);
-      if (collisionIndex >= 0) {
-        throw new Error(`Question revision is immutable and already exists: ${keys[collisionIndex]}`);
-      }
+      if (collisionIndex >= 0) throw new Error(`Question revision is immutable and already exists: ${keys[collisionIndex]}`);
 
       const existingForLogicalQuestions = questionIds.length === 0
         ? []
@@ -50,11 +40,8 @@ export class QuestionRepository {
         ),
       );
       if (numericCollision !== undefined) {
-        throw new Error(
-          `Question numeric revision already exists: ${numericCollision.questionId} revision ${numericCollision.revision}`,
-        );
+        throw new Error(`Question numeric revision already exists: ${numericCollision.questionId} revision ${numericCollision.revision}`);
       }
-
       await this.database.questions.bulkAdd(records);
     });
   }
@@ -64,10 +51,11 @@ export class QuestionRepository {
   }
 }
 
+/** Read/write boundary remains legacy-compatible so DB migration/restore can preserve old history. */
 export class AttemptRepository {
   constructor(private readonly database: QbtDatabase = db) {}
 
-  async add(attempt: PersistedAttempt): Promise<void> {
+  async add(attempt: Attempt): Promise<void> {
     await this.database.attempts.add(attempt);
   }
 
@@ -113,7 +101,7 @@ export class StudyStateRepository {
 }
 
 export async function persistAttemptTransaction(
-  attempt: PersistedAttempt,
+  attempt: Attempt,
   studyState: StudyState | null,
   database: QbtDatabase = db,
 ): Promise<void> {
@@ -125,7 +113,7 @@ export async function persistAttemptTransaction(
 
 /** P0 #4: a resolved Attempt and its Session progress/end state commit together. */
 export async function persistAttemptAndSessionTransaction(
-  attempt: PersistedAttempt,
+  attempt: Attempt,
   session: QuizSession,
   studyState: StudyState | null = null,
   database: QbtDatabase = db,
