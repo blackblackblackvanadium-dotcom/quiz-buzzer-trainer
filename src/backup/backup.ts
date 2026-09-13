@@ -1,4 +1,4 @@
-import type { AppSetting, Attempt, QuestionRevision, QuizSession, StudyState } from '../domain/types';
+import type { AppSetting, PersistedAttempt, QuestionRevision, QuizSession, StudyState } from '../domain/types';
 import { DB_SCHEMA_VERSION, db, type QbtDatabase, type QuestionRecord, toQuestionRecord } from '../data/db';
 import type { PortableBackupV1 } from '../data/validation';
 import { parseCompatiblePortableBackup } from './backupCodec';
@@ -34,11 +34,41 @@ export function parseBackupJson(text: string): PortableBackupV1 {
   return parseCompatiblePortableBackup(JSON.parse(text) as unknown);
 }
 
-/** Replace Restore only. The compatible parser validates and normalizes before this mutation. */
+function assertUnique(values: readonly string[], label: string): void {
+  if (new Set(values).size !== values.length) throw new Error(`${label} contains duplicate keys`);
+}
+
+/** Validate collection-level restore invariants before the destructive transaction begins. */
+function validateRestoreSnapshot(backup: PortableBackupV1): void {
+  assertUnique(
+    backup.data.questions.map((question) => `${question.questionId}::${question.revisionId}`),
+    'Backup questions',
+  );
+  assertUnique(
+    backup.data.questions.map((question) => `${question.questionId}::revision:${question.revision}`),
+    'Backup numeric question revisions',
+  );
+  assertUnique(backup.data.attempts.map((attempt) => attempt.attemptId), 'Backup attempts');
+  assertUnique(backup.data.sessions.map((session) => session.sessionId), 'Backup sessions');
+  assertUnique(
+    backup.data.studyStates.map((state) => `${state.questionId}::${state.revisionId}`),
+    'Backup study states',
+  );
+  assertUnique(backup.data.settings.map((setting) => setting.key), 'Backup settings');
+}
+
+/**
+ * Replace Restore only.
+ * The API revalidates the complete snapshot before opening the destructive transaction,
+ * then all table clears/inserts commit atomically or roll back together.
+ */
 export async function replaceRestore(
-  backup: PortableBackupV1,
+  backup: unknown,
   database: QbtDatabase = db,
 ): Promise<void> {
+  const validated = parseCompatiblePortableBackup(backup);
+  validateRestoreSnapshot(validated);
+
   await database.transaction(
     'rw',
     database.questions,
@@ -54,11 +84,11 @@ export async function replaceRestore(
         database.sessions.clear(),
         database.settings.clear(),
       ]);
-      await database.questions.bulkAdd(backup.data.questions.map(toQuestionRecord));
-      await database.attempts.bulkAdd(backup.data.attempts as Attempt[]);
-      await database.studyStates.bulkAdd(backup.data.studyStates as StudyState[]);
-      await database.sessions.bulkAdd(backup.data.sessions as QuizSession[]);
-      await database.settings.bulkAdd(backup.data.settings as AppSetting[]);
+      await database.questions.bulkAdd(validated.data.questions.map(toQuestionRecord));
+      await database.attempts.bulkAdd(validated.data.attempts as PersistedAttempt[]);
+      await database.studyStates.bulkAdd(validated.data.studyStates as StudyState[]);
+      await database.sessions.bulkAdd(validated.data.sessions as QuizSession[]);
+      await database.settings.bulkAdd(validated.data.settings as AppSetting[]);
     },
   );
 }

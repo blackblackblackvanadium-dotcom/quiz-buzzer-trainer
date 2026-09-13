@@ -198,7 +198,15 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
             },
           );
     } else {
-      nextSession = updateSessionProgress(session, session.consumedQuestionCount + 1, null);
+      const consumedQuestionCount = session.consumedQuestionCount + 1;
+      nextSession = consumedQuestionCount === session.targetQuestionCount
+        ? endSessionRecord(
+            session,
+            'completed',
+            attempt.completedAt,
+            { consumedQuestionCount },
+          )
+        : updateSessionProgress(session, consumedQuestionCount, null);
     }
 
     await persistAttemptAndSessionTransaction(attempt, nextSession, studyState);
@@ -293,18 +301,14 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     if (savingRef.current || phase !== 'result' || session === null) return;
     savingRef.current = true;
     try {
-      if (isCompetitiveMode(mode) && modeState?.endReason !== null && modeState?.endReason !== undefined) {
+      if (session.endReason !== null) {
         setPhase('finished');
         return;
       }
 
       const nextIndex = questionIndex + 1;
       if (nextIndex >= questions.length) {
-        const ended = endSessionRecord(session, 'completed', new Date().toISOString());
-        await new SessionRepository().put(ended);
-        setSession(ended);
-        setPhase('finished');
-        return;
+        throw new Error('Session plan exhausted without an atomically persisted terminal state');
       }
 
       setQuestionIndex(nextIndex);
@@ -317,7 +321,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     } finally {
       savingRef.current = false;
     }
-  }, [mode, modeState?.endReason, phase, questionIndex, questions.length, session]);
+  }, [mode, phase, questionIndex, questions.length, session]);
 
   const endManually = useCallback(async () => {
     if (savingRef.current || session === null || session.endReason !== null) return;

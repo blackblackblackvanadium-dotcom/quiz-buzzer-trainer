@@ -12,6 +12,12 @@ function epochMs(value: string, label: string): number {
   return parsed;
 }
 
+function assertSessionOpen(session: QuizSession): void {
+  if (session.endReason !== null || session.endedAtEpochMs !== null || session.endedAt !== null) {
+    throw new Error(`Session already ended${session.endReason === null ? '' : `: ${session.endReason}`}`);
+  }
+}
+
 export function createSessionRecord(input: {
   readonly sessionId: SessionId;
   readonly mode: QuizMode;
@@ -41,10 +47,10 @@ export function updateSessionProgress(
   consumedQuestionCount: number,
   modeResult: SessionModeResult,
 ): QuizSession {
+  assertSessionOpen(session);
   if (!Number.isInteger(consumedQuestionCount) || consumedQuestionCount < 0 || consumedQuestionCount > session.targetQuestionCount) {
     throw new Error('consumedQuestionCount is outside the fixed Session plan');
   }
-  if (session.endReason !== null) throw new Error(`Session already ended: ${session.endReason}`);
   return { ...session, consumedQuestionCount, modeResult };
 }
 
@@ -57,11 +63,18 @@ export function endSessionRecord(
     readonly modeResult?: SessionModeResult;
   } = {},
 ): QuizSession {
+  assertSessionOpen(session);
   const endedAtEpochMs = epochMs(endedAt, 'endedAt');
   if (endedAtEpochMs < session.startedAtEpochMs) throw new Error('endedAt must not precede startedAt');
   const consumedQuestionCount = options.consumedQuestionCount ?? session.consumedQuestionCount;
   if (!Number.isInteger(consumedQuestionCount) || consumedQuestionCount < 0 || consumedQuestionCount > session.targetQuestionCount) {
     throw new Error('consumedQuestionCount is outside the fixed Session plan');
+  }
+  if ((reason === 'completed' || reason === 'survival_cleared') && consumedQuestionCount !== session.targetQuestionCount) {
+    throw new Error(`${reason} requires the fixed Session plan to be exhausted`);
+  }
+  if ((reason === 'survival_failed' || reason === 'survival_cleared') && session.mode !== 'survival') {
+    throw new Error(`${reason} is only valid for Survival sessions`);
   }
   return {
     ...session,

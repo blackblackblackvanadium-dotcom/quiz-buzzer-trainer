@@ -1,4 +1,11 @@
-import type { Attempt, QuestionRevision, QuizMode, QuizSession, StudyState } from '../domain/types';
+import type {
+  Attempt,
+  PersistedAttempt,
+  QuestionRevision,
+  QuizMode,
+  QuizSession,
+  StudyState,
+} from '../domain/types';
 import { questionKey } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
 
@@ -9,6 +16,40 @@ function assertInputRevisionUniqueness(questions: readonly QuestionRevision[]): 
   const numericRevisions = questions.map((question) => `${question.questionId}::revision:${question.revision}`);
   if (new Set(numericRevisions).size !== numericRevisions.length) {
     throw new Error('Question batch contains duplicate numeric revisions for one questionId');
+  }
+}
+
+function assertPersistedAttemptContract(attempt: PersistedAttempt): void {
+  const requiredCurrentFields = [
+    'isCorrect',
+    'startedAtEpochMs',
+    'completedAtEpochMs',
+    'totalGraphemeCount',
+    'kimari',
+  ] as const;
+  for (const field of requiredCurrentFields) {
+    if (!(field in attempt)) throw new Error(`PersistedAttempt.${field} is required`);
+  }
+  if (Date.parse(attempt.startedAt) !== attempt.startedAtEpochMs) {
+    throw new Error('PersistedAttempt startedAt aliases are inconsistent');
+  }
+  if (Date.parse(attempt.completedAt) !== attempt.completedAtEpochMs) {
+    throw new Error('PersistedAttempt completedAt aliases are inconsistent');
+  }
+}
+
+function assertSessionPersistenceInvariant(session: QuizSession): void {
+  const hasEndedAt = session.endedAt !== null;
+  const hasEndedAtEpoch = session.endedAtEpochMs !== null;
+  if (hasEndedAt !== hasEndedAtEpoch) throw new Error('Session endedAt aliases are inconsistent');
+  if (session.endReason !== null && !hasEndedAt) {
+    throw new Error('Session endReason requires endedAt');
+  }
+  if (Date.parse(session.startedAt) !== session.startedAtEpochMs) {
+    throw new Error('Session startedAt aliases are inconsistent');
+  }
+  if (session.endedAt !== null && Date.parse(session.endedAt) !== session.endedAtEpochMs) {
+    throw new Error('Session endedAt aliases are inconsistent');
   }
 }
 
@@ -51,11 +92,12 @@ export class QuestionRepository {
   }
 }
 
-/** Read/write boundary remains legacy-compatible so DB migration/restore can preserve old history. */
+/** Current APP writes require PersistedAttempt; historical compatibility is read/migration only. */
 export class AttemptRepository {
   constructor(private readonly database: QbtDatabase = db) {}
 
-  async add(attempt: Attempt): Promise<void> {
+  async add(attempt: PersistedAttempt): Promise<void> {
+    assertPersistedAttemptContract(attempt);
     await this.database.attempts.add(attempt);
   }
 
@@ -68,10 +110,12 @@ export class SessionRepository {
   constructor(private readonly database: QbtDatabase = db) {}
 
   async create(session: QuizSession): Promise<void> {
+    assertSessionPersistenceInvariant(session);
     await this.database.sessions.add(session);
   }
 
   async put(session: QuizSession): Promise<void> {
+    assertSessionPersistenceInvariant(session);
     await this.database.sessions.put(session);
   }
 
@@ -101,23 +145,28 @@ export class StudyStateRepository {
 }
 
 export async function persistAttemptTransaction(
-  attempt: Attempt,
+  attempt: PersistedAttempt,
   studyState: StudyState | null,
   database: QbtDatabase = db,
 ): Promise<void> {
+  assertPersistedAttemptContract(attempt);
   await database.transaction('rw', database.attempts, database.studyStates, async () => {
     await database.attempts.add(attempt);
     if (studyState !== null) await database.studyStates.put(studyState);
   });
 }
 
-/** P0 #4: a resolved Attempt and its Session progress/end state commit together. */
+/** A resolved Attempt and its Session progress/end state commit together. */
 export async function persistAttemptAndSessionTransaction(
-  attempt: Attempt,
+  attempt: PersistedAttempt,
   session: QuizSession,
   studyState: StudyState | null = null,
   database: QbtDatabase = db,
 ): Promise<void> {
+  assertPersistedAttemptContract(attempt);
+  assertSessionPersistenceInvariant(session);
+  if (attempt.sessionId !== session.sessionId) throw new Error('Attempt and Session IDs do not match');
+
   await database.transaction('rw', database.attempts, database.sessions, database.studyStates, async () => {
     await database.attempts.add(attempt);
     await database.sessions.put(session);
