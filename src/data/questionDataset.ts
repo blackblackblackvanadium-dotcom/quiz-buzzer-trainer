@@ -30,17 +30,14 @@ const CSV_HEADER = [
   'extensionsJson',
 ] as const;
 
+/** Canonical Question Dataset interchange/export format. */
 export function parseQuestionDatasetJson(text: string): QuestionDatasetV1 {
   return parseQuestionDatasetV1(JSON.parse(text) as unknown);
 }
 
+/** Canonical Question Dataset export. CSV is intentionally not an export format. */
 export function serializeQuestionDataset(dataset: QuestionDatasetV1): string {
   return JSON.stringify(parseQuestionDatasetV1(dataset), null, 2);
-}
-
-function encodeCsvCell(value: string): string {
-  if (!/[",\r\n]/u.test(value)) return value;
-  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function parseCsvRows(text: string): string[][] {
@@ -94,29 +91,10 @@ function parseJsonCell(value: string, label: string): unknown {
   }
 }
 
-export function serializeQuestionDatasetCsv(datasetInput: QuestionDatasetV1): string {
-  const dataset = parseQuestionDatasetV1(datasetInput);
-  const lines = [CSV_HEADER.join(',')];
-  for (const question of dataset.questions) {
-    const row = [
-      question.questionId,
-      question.revisionId,
-      String(question.revision),
-      question.prompt,
-      JSON.stringify(question.answers),
-      JSON.stringify(question.classification),
-      JSON.stringify(question.determiningPoints),
-      JSON.stringify(question.sources),
-      JSON.stringify(question.derived),
-      JSON.stringify(question.quality),
-      JSON.stringify(question.metadata),
-      question.extensions === undefined ? '' : JSON.stringify(question.extensions),
-    ];
-    lines.push(row.map(encodeCsvCell).join(','));
-  }
-  return `${lines.join('\n')}\n`;
-}
-
+/**
+ * Auxiliary import-only CSV adapter. It produces the same canonical Dataset v1
+ * object but CSV itself is not a canonical export, backup, or restore format.
+ */
 export function parseQuestionDatasetCsv(text: string, metadata: QuestionDatasetCsvMetadata): QuestionDatasetV1 {
   const rows = parseCsvRows(text);
   if (rows.length === 0) throw new Error('CSV is empty');
