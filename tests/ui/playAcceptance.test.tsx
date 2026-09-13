@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { db, toQuestionRecord } from '../../src/data/db';
 import { PlayPage } from '../../src/pages/PlayPage';
 import { makeQuestionV1 } from '../fixtures/questionV1';
 
 afterEach(async () => {
+  cleanup();
   db.close();
   await db.delete();
   localStorage.clear();
