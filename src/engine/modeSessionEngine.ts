@@ -1,4 +1,5 @@
 import type {
+  Attempt,
   KimariSessionResult,
   PersistedAttempt,
   QuizMode,
@@ -47,6 +48,14 @@ export function createModeSessionState(mode: CompetitiveMode, targetQuestionCoun
   };
 }
 
+function isPersistedAttempt(attempt: Attempt): attempt is PersistedAttempt {
+  return 'isCorrect' in attempt
+    && 'startedAtEpochMs' in attempt
+    && 'completedAtEpochMs' in attempt
+    && 'totalGraphemeCount' in attempt
+    && 'kimari' in attempt;
+}
+
 function assertActive(state: ModeSessionState): void {
   if (state.endReason !== null) throw new Error(`Session already ended: ${state.endReason}`);
   if (state.consumedQuestionCount >= state.targetQuestionCount) {
@@ -54,22 +63,22 @@ function assertActive(state: ModeSessionState): void {
   }
 }
 
-function assertAttemptBelongsToMode(state: ModeSessionState, attempt: PersistedAttempt): void {
+function assertCurrentAttempt(state: ModeSessionState, attempt: Attempt): asserts attempt is PersistedAttempt {
+  if (!isPersistedAttempt(attempt)) throw new Error('Competitive mode requires a current PersistedAttempt contract record');
   if (attempt.mode !== state.mode) throw new Error(`Attempt mode ${attempt.mode} does not match session mode ${state.mode}`);
   if (attempt.outcome === 'aborted') throw new Error('aborted Attempt is only valid for explicit session termination');
   if (state.mode === 'kimari' && attempt.kimari === null) throw new Error('Kimari Attempt requires persisted Kimari metrics');
 }
 
-function resolveKimari(state: ModeSessionState, _attempt: PersistedAttempt): ModeResolution {
+function resolveKimari(state: ModeSessionState): ModeResolution {
   const consumedQuestionCount = state.consumedQuestionCount + 1;
   if (consumedQuestionCount === state.targetQuestionCount) {
-    const modeResult: KimariSessionResult = { mode: 'kimari' };
     return {
       state: {
         ...state,
         consumedQuestionCount,
         endReason: 'completed',
-        modeResult,
+        modeResult: { mode: 'kimari' },
       },
       continuation: { type: 'END_SESSION', reason: 'completed' },
     };
@@ -82,7 +91,6 @@ function resolveKimari(state: ModeSessionState, _attempt: PersistedAttempt): Mod
 
 function resolveSurvival(state: ModeSessionState, attempt: PersistedAttempt): ModeResolution {
   if (attempt.outcome === 'skip') throw new Error('Skip is forbidden in Survival');
-
   const consumedQuestionCount = state.consumedQuestionCount + 1;
 
   if (attempt.outcome === 'incorrect' || attempt.outcome === 'pass') {
@@ -90,18 +98,10 @@ function resolveSurvival(state: ModeSessionState, attempt: PersistedAttempt): Mo
       mode: 'survival',
       score: state.score,
       cleared: false,
-      failure: {
-        failedAttemptId: attempt.attemptId,
-        cause: attempt.outcome,
-      },
+      failure: { failedAttemptId: attempt.attemptId, cause: attempt.outcome },
     };
     return {
-      state: {
-        ...state,
-        consumedQuestionCount,
-        endReason: 'survival_failed',
-        modeResult,
-      },
+      state: { ...state, consumedQuestionCount, endReason: 'survival_failed', modeResult },
       continuation: { type: 'END_SESSION', reason: 'survival_failed' },
     };
   }
@@ -112,45 +112,24 @@ function resolveSurvival(state: ModeSessionState, attempt: PersistedAttempt): Mo
 
   const score = state.score + 1;
   if (consumedQuestionCount === state.targetQuestionCount) {
-    const modeResult: SurvivalSessionResult = {
-      mode: 'survival',
-      score,
-      cleared: true,
-      failure: null,
-    };
+    const modeResult: SurvivalSessionResult = { mode: 'survival', score, cleared: true, failure: null };
     return {
-      state: {
-        ...state,
-        consumedQuestionCount,
-        score,
-        endReason: 'survival_cleared',
-        modeResult,
-      },
+      state: { ...state, consumedQuestionCount, score, endReason: 'survival_cleared', modeResult },
       continuation: { type: 'END_SESSION', reason: 'survival_cleared' },
     };
   }
 
-  const modeResult: SurvivalSessionResult = {
-    mode: 'survival',
-    score,
-    cleared: false,
-    failure: null,
-  };
+  const modeResult: SurvivalSessionResult = { mode: 'survival', score, cleared: false, failure: null };
   return {
-    state: {
-      ...state,
-      consumedQuestionCount,
-      score,
-      modeResult,
-    },
+    state: { ...state, consumedQuestionCount, score, modeResult },
     continuation: { type: 'NEXT_QUESTION' },
   };
 }
 
-export function resolveModeAttempt(state: ModeSessionState, attempt: PersistedAttempt): ModeResolution {
+export function resolveModeAttempt(state: ModeSessionState, attempt: Attempt): ModeResolution {
   assertActive(state);
-  assertAttemptBelongsToMode(state, attempt);
-  return state.mode === 'kimari' ? resolveKimari(state, attempt) : resolveSurvival(state, attempt);
+  assertCurrentAttempt(state, attempt);
+  return state.mode === 'kimari' ? resolveKimari(state) : resolveSurvival(state, attempt);
 }
 
 export function terminateModeSession(
@@ -160,12 +139,7 @@ export function terminateModeSession(
   if (state.endReason !== null) return state;
   const modeResult: SessionModeResult = state.mode === 'kimari'
     ? { mode: 'kimari' }
-    : {
-        mode: 'survival',
-        score: state.score,
-        cleared: false,
-        failure: null,
-      };
+    : { mode: 'survival', score: state.score, cleared: false, failure: null };
   return { ...state, endReason: reason, modeResult };
 }
 
