@@ -1,10 +1,14 @@
-import Dexie, { type Table } from 'dexie';
+import Dexie, { type Table, type Transaction } from 'dexie';
 import type { AppSetting, Attempt, QuestionRevision, QuizSession, StudyState } from '../domain/types';
 import { questionKey } from '../domain/types';
-import { isCanonicalQuestionRecord, migrateLegacyQuestionRecord, type LegacyQuestionRecordV1 } from './questionMigration';
-import { prepareQuestionRecordV1 } from './validation';
+import {
+  isCanonicalQuestionRecord,
+  migrateLegacyQuestionRecord,
+  migratePreConformanceQuestionRecord,
+  type LegacyQuestionRecordV1,
+} from './questionMigration';
 
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 
 export interface QuestionRecord extends QuestionRevision {
   readonly key: string;
@@ -26,6 +30,11 @@ const DB_V2_STORES = {
   settings: '&key',
 } as const;
 
+const DB_V3_STORES = {
+  ...DB_V2_STORES,
+  questions: '&key, &revisionId, questionId, revision, classification.genre.primary, metadata.status',
+} as const;
+
 export class QbtDatabase extends Dexie {
   questions!: Table<QuestionRecord, string>;
   attempts!: Table<Attempt, string>;
@@ -37,33 +46,58 @@ export class QbtDatabase extends Dexie {
     super(name);
 
     this.version(1).stores(DB_V1_STORES);
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores(DB_V2_STORES)
       .upgrade(async (transaction) => {
         const questionsTable = transaction.table('questions');
         await questionsTable.toCollection().modify((record: Record<string, unknown>) => {
-          const { key: _legacyKey, ...payload } = record;
+          const { key: _storedKey, ...payload } = record;
           const migrated = isCanonicalQuestionRecord(payload)
-            ? prepareQuestionRecordV1(payload, extractVerificationTime(payload))
+            ? migratePreConformanceQuestionRecord(payload, extractVerificationTime(payload))
             : migrateLegacyQuestionRecord(record as unknown as LegacyQuestionRecordV1);
-          const verified = prepareQuestionRecordV1(migrated, migrated.derived.computedAt);
-          const stored = toQuestionRecord(verified);
-          for (const existingKey of Object.keys(record)) delete record[existingKey];
-          Object.assign(record, stored);
+          replaceStoredQuestion(record, migrated);
         });
-
-        const migratedRecords = await questionsTable.toArray() as QuestionRecord[];
-        const numericRevisions = new Set<string>();
-        for (const record of migratedRecords) {
-          const expectedKey = questionKey(record);
-          if (record.key !== expectedKey) throw new Error(`Migrated Question key mismatch: expected ${expectedKey}`);
-          const numericKey = `${record.questionId}::revision:${record.revision}`;
-          if (numericRevisions.has(numericKey)) {
-            throw new Error(`Migrated Question numeric revision collision: ${numericKey}`);
-          }
-          numericRevisions.add(numericKey);
-        }
+        await verifyQuestionTable(transaction);
       });
+
+    this.version(DB_SCHEMA_VERSION)
+      .stores(DB_V3_STORES)
+      .upgrade(async (transaction) => {
+        const questionsTable = transaction.table('questions');
+        await questionsTable.toCollection().modify((record: Record<string, unknown>) => {
+          const { key: _storedKey, ...payload } = record;
+          const migrated = migratePreConformanceQuestionRecord(payload, extractVerificationTime(payload));
+          replaceStoredQuestion(record, migrated);
+        });
+        await verifyQuestionTable(transaction);
+      });
+  }
+}
+
+function replaceStoredQuestion(record: Record<string, unknown>, question: QuestionRevision): void {
+  const stored = toQuestionRecord(question);
+  for (const existingKey of Object.keys(record)) delete record[existingKey];
+  Object.assign(record, stored);
+}
+
+async function verifyQuestionTable(transaction: Transaction): Promise<void> {
+  const records = await transaction.table('questions').toArray() as QuestionRecord[];
+  const revisionIds = new Set<string>();
+  const numericRevisions = new Set<string>();
+
+  for (const record of records) {
+    const expectedKey = questionKey(record);
+    if (record.key !== expectedKey) throw new Error(`Migrated Question key mismatch: expected ${expectedKey}`);
+    if (revisionIds.has(record.revisionId)) {
+      throw new Error(`Migrated Question revisionId collision: ${record.revisionId}`);
+    }
+    revisionIds.add(record.revisionId);
+
+    const numericKey = `${record.questionId}::revision:${record.revision}`;
+    if (numericRevisions.has(numericKey)) {
+      throw new Error(`Migrated Question numeric revision collision: ${numericKey}`);
+    }
+    numericRevisions.add(numericKey);
   }
 }
 
