@@ -1,4 +1,10 @@
-import { QUESTION_SCHEMA_VERSION, type QuestionRecordV1 } from '../domain/types';
+import {
+  QUESTION_SCHEMA_VERSION,
+  QUALITY_PROFILE_VERSION,
+  type QuestionRecordV1,
+} from '../domain/types';
+import { computeDerivedQuestionData } from './questionIntegrity';
+import { parseQuestionRecordV1 } from './validation';
 
 export interface LegacyQuestionRecordV1 {
   readonly key?: string;
@@ -17,12 +23,7 @@ export interface LegacyQuestionRecordV1 {
   readonly createdAt: string;
 }
 
-const MIGRATION_METHOD = 'legacy_db_v1_migration';
-const MIGRATION_VERSION = 'question-schema-v1-db-migration-1';
-
-function countGraphemes(text: string): number {
-  return Array.from(new Intl.Segmenter('ja', { granularity: 'grapheme' }).segment(text)).length;
-}
+const MIGRATION_VERSION = 'question-schema-v1-db-migration-2';
 
 function revisionNumber(revisionId: string): number {
   const match = /^r(\d+)$/iu.exec(revisionId.trim());
@@ -35,24 +36,20 @@ function safeIsoDate(value: string): string {
   return Number.isFinite(Date.parse(value)) ? value : '1970-01-01T00:00:00.000Z';
 }
 
-function derivedTextKey(text: string): string {
-  return text.normalize('NFKC').toLocaleLowerCase('ja-JP').replace(/[\s\p{Z}\p{P}]+/gu, '');
-}
-
 export function isCanonicalQuestionRecord(value: unknown): value is QuestionRecordV1 {
   return typeof value === 'object' && value !== null && (value as { schemaVersion?: unknown }).schemaVersion === QUESTION_SCHEMA_VERSION;
 }
 
 export function migrateLegacyQuestionRecord(value: LegacyQuestionRecordV1): QuestionRecordV1 {
-  const graphemeCount = countGraphemes(value.prompt);
   const createdAt = safeIsoDate(value.createdAt);
   const provenance = {
-    method: MIGRATION_METHOD,
+    method: 'imported' as const,
     generator: 'quiz-buzzer-trainer',
     generatorVersion: MIGRATION_VERSION,
     note: 'Migrated from DB schema v1 legacy Question record.',
-  } as const;
+  };
 
+  const derived = computeDerivedQuestionData(value.prompt, createdAt);
   const determiningPoints = [
     value.advancedBuzzIndex === undefined
       ? null
@@ -73,21 +70,17 @@ export function migrateLegacyQuestionRecord(value: LegacyQuestionRecordV1): Ques
           note: 'Migrated from idealBuzzIndex.',
         },
   ].filter((point): point is NonNullable<typeof point> =>
-    point !== null && point.requiredPrefixGraphemes >= 1 && point.requiredPrefixGraphemes <= graphemeCount,
+    point !== null && point.requiredPrefixGraphemes >= 1 && point.requiredPrefixGraphemes <= derived.graphemeCount,
   );
 
-  return {
+  const migrated: QuestionRecordV1 = {
     schemaVersion: QUESTION_SCHEMA_VERSION,
     questionId: value.questionId,
     revisionId: value.revisionId,
     revision: revisionNumber(value.revisionId),
     prompt: value.prompt,
     answers: {
-      primaryAnswer: {
-        id: 'primary',
-        text: value.canonicalAnswer,
-        provenance,
-      },
+      primaryAnswer: { id: 'primary', text: value.canonicalAnswer, provenance },
       acceptedAnswers: value.acceptableAnswers.map((text, index) => ({
         id: `accepted-${index + 1}`,
         text,
@@ -108,31 +101,16 @@ export function migrateLegacyQuestionRecord(value: LegacyQuestionRecordV1): Ques
         provenance,
       },
       questionType: value.pattern
-        ? {
-            code: value.pattern,
-            taxonomyVersion: 'legacy-v1',
-            provenance,
-          }
+        ? { code: value.pattern, taxonomyVersion: 'legacy-v1', provenance }
         : undefined,
       tags: value.tags.map((id) => ({ id })),
       difficulty: Number.isFinite(value.difficulty)
-        ? {
-            value: value.difficulty,
-            scale: 'legacy-v1',
-            provenance,
-          }
+        ? { value: value.difficulty, scale: 'legacy-v1', provenance }
         : undefined,
     },
     determiningPoints,
     sources: [],
-    derived: {
-      graphemeCount,
-      graphemeProfile: 'Intl.Segmenter:ja:grapheme',
-      exactTextHash: `legacy-migration:${value.questionId}:${value.revisionId}`,
-      duplicateDetectionKey: derivedTextKey(value.prompt),
-      computedAt: createdAt,
-      generatorVersion: MIGRATION_VERSION,
-    },
+    derived,
     quality: {
       status: 'warning',
       issues: [{
@@ -141,7 +119,7 @@ export function migrateLegacyQuestionRecord(value: LegacyQuestionRecordV1): Ques
         message: 'Question was migrated from the legacy DB v1 shape and should be revalidated against authoritative data.',
       }],
       lastCheckedAt: createdAt,
-      qualityProfileVersion: 'schema-v1-migration',
+      qualityProfileVersion: QUALITY_PROFILE_VERSION,
     },
     metadata: {
       createdAt,
@@ -149,4 +127,6 @@ export function migrateLegacyQuestionRecord(value: LegacyQuestionRecordV1): Ques
       status: 'active',
     },
   };
+
+  return parseQuestionRecordV1(migrated);
 }
