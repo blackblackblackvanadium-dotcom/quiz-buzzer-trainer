@@ -3,6 +3,7 @@ import {
   QUESTION_DATASET_SCHEMA_VERSION,
   type QuestionDatasetV1,
 } from '../domain/types';
+import { assertUntrustedTextWithinLimit } from '../security/inputLimits';
 import { parseQuestionDatasetV1 } from './validation';
 
 export interface QuestionDatasetCsvMetadata {
@@ -32,6 +33,7 @@ const CSV_HEADER = [
 
 /** Canonical Question Dataset interchange/export format. */
 export function parseQuestionDatasetJson(text: string): QuestionDatasetV1 {
+  assertUntrustedTextWithinLimit(text, 'Question Dataset JSON');
   return parseQuestionDatasetV1(JSON.parse(text) as unknown);
 }
 
@@ -41,6 +43,7 @@ export function serializeQuestionDataset(dataset: QuestionDatasetV1): string {
 }
 
 function parseCsvRows(text: string): string[][] {
+  assertUntrustedTextWithinLimit(text, 'Question Dataset CSV');
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = '';

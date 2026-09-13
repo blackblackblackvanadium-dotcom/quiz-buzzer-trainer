@@ -1,6 +1,12 @@
 import type { AppSetting, PersistedAttempt, QuestionRevision, QuizSession, StudyState } from '../domain/types';
 import { DB_SCHEMA_VERSION, db, type QbtDatabase, type QuestionRecord, toQuestionRecord } from '../data/db';
 import type { PortableBackupV1 } from '../data/validation';
+import {
+  broadcastDatabaseReplacement,
+  bumpDatabaseGeneration,
+  withExclusiveAppWrite,
+} from '../data/concurrency';
+import { assertUntrustedTextWithinLimit } from '../security/inputLimits';
 import { parseCompatiblePortableBackup } from './backupCodec';
 
 export const APP_VERSION = '0.1.0';
@@ -31,6 +37,7 @@ export function serializeBackup(backup: PortableBackupV1): string {
 }
 
 export function parseBackupJson(text: string): PortableBackupV1 {
+  assertUntrustedTextWithinLimit(text, 'Backup JSON');
   return parseCompatiblePortableBackup(JSON.parse(text) as unknown);
 }
 
@@ -60,7 +67,8 @@ function validateRestoreSnapshot(backup: PortableBackupV1): void {
 /**
  * Replace Restore only.
  * The API revalidates the complete snapshot before opening the destructive transaction,
- * then all table clears/inserts commit atomically or roll back together.
+ * then all table clears/inserts commit atomically or roll back together. Successful
+ * replacement advances the cross-tab generation before the write lock is released.
  */
 export async function replaceRestore(
   backup: unknown,
@@ -69,26 +77,30 @@ export async function replaceRestore(
   const validated = parseCompatiblePortableBackup(backup);
   validateRestoreSnapshot(validated);
 
-  await database.transaction(
-    'rw',
-    database.questions,
-    database.attempts,
-    database.studyStates,
-    database.sessions,
-    database.settings,
-    async () => {
-      await Promise.all([
-        database.questions.clear(),
-        database.attempts.clear(),
-        database.studyStates.clear(),
-        database.sessions.clear(),
-        database.settings.clear(),
-      ]);
-      await database.questions.bulkAdd(validated.data.questions.map(toQuestionRecord));
-      await database.attempts.bulkAdd(validated.data.attempts as PersistedAttempt[]);
-      await database.studyStates.bulkAdd(validated.data.studyStates as StudyState[]);
-      await database.sessions.bulkAdd(validated.data.sessions as QuizSession[]);
-      await database.settings.bulkAdd(validated.data.settings as AppSetting[]);
-    },
-  );
+  await withExclusiveAppWrite(async () => {
+    await database.transaction(
+      'rw',
+      database.questions,
+      database.attempts,
+      database.studyStates,
+      database.sessions,
+      database.settings,
+      async () => {
+        await Promise.all([
+          database.questions.clear(),
+          database.attempts.clear(),
+          database.studyStates.clear(),
+          database.sessions.clear(),
+          database.settings.clear(),
+        ]);
+        await database.questions.bulkAdd(validated.data.questions.map(toQuestionRecord));
+        await database.attempts.bulkAdd(validated.data.attempts as PersistedAttempt[]);
+        await database.studyStates.bulkAdd(validated.data.studyStates as StudyState[]);
+        await database.sessions.bulkAdd(validated.data.sessions as QuizSession[]);
+        await database.settings.bulkAdd(validated.data.settings as AppSetting[]);
+      },
+    );
+    const generation = bumpDatabaseGeneration();
+    broadcastDatabaseReplacement(generation);
+  });
 }

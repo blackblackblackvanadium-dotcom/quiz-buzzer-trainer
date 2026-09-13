@@ -28,6 +28,7 @@ import {
   StudyStateRepository,
   persistAttemptAndSessionTransaction,
 } from '../data/repositories';
+import { getDatabaseGeneration } from '../data/concurrency';
 import {
   MODE_CAPABILITIES,
   resolveKimariReference,
@@ -75,7 +76,12 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
   const questionStartedAtRef = useRef<string>('');
   const sessionIdRef = useRef<SessionId>(randomId('session'));
   const sessionStartedAtRef = useRef<string>(new Date().toISOString());
+  const sessionGenerationRef = useRef<string | null>(null);
   const savingRef = useRef(false);
+  const buzzingRef = useRef(false);
+  const answerComposingRef = useRef(false);
+  const answerEnterBlockedRef = useRef(false);
+  const resultEnterBlockedRef = useRef(false);
 
   const capability = MODE_CAPABILITIES[mode];
   const question = questions[questionIndex] ?? null;
@@ -83,6 +89,17 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     () => (mode === 'kimari' && question !== null ? resolveKimariReference(question) : null),
     [mode, question],
   );
+
+  useEffect(() => {
+    const releaseCarryThrough = (event: KeyboardEvent) => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        answerEnterBlockedRef.current = false;
+        resultEnterBlockedRef.current = false;
+      }
+    };
+    window.addEventListener('keyup', releaseCarryThrough, true);
+    return () => window.removeEventListener('keyup', releaseCarryThrough, true);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,7 +128,9 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
         targetQuestionCount: selected.length,
         modeResult: competitiveState?.modeResult ?? null,
       });
-      await sessionRepo.put(created);
+      const generation = getDatabaseGeneration();
+      sessionGenerationRef.current = generation;
+      await sessionRepo.put(created, generation);
       if (cancelled) return;
       setModeState(competitiveState);
       setSession(created);
@@ -126,6 +145,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
 
   useEffect(() => {
     if (error === null || session === null || session.endReason !== null) return;
+    engineRef.current?.pause();
     const failed = endSessionRecord(
       session,
       'fatal_error',
@@ -133,7 +153,9 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
       { modeResult: modeState?.modeResult ?? session.modeResult },
     );
     setSession(failed);
-    void new SessionRepository().put(failed).catch(() => undefined);
+    void new SessionRepository()
+      .put(failed, sessionGenerationRef.current ?? undefined)
+      .catch(() => undefined);
   }, [error, modeState, session]);
 
   const startQuestion = useCallback(() => {
@@ -147,6 +169,10 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     setLastAttempt(null);
     setReader(EMPTY_READER);
     setError(null);
+    buzzingRef.current = false;
+    answerComposingRef.current = false;
+    answerEnterBlockedRef.current = false;
+    resultEnterBlockedRef.current = false;
     questionStartedAtRef.current = new Date().toISOString();
     const nextPhase = transitionPhase('ready', 'START_READING', mode);
     setPhase(nextPhase);
@@ -166,11 +192,18 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     engine.start((snapshot) => setReader(snapshot));
   }, [capability.usesTypewriter, kimariReference, mode, question]);
 
-  const doBuzz = useCallback(() => {
-    if (phase !== 'reading' || engineRef.current === null) return;
-    const snapshot = engineRef.current.buzz();
-    setBuzz(snapshot);
-    setPhase(transitionPhase(phase, 'BUZZ', mode));
+  const doBuzz = useCallback((keyboardEnter: boolean) => {
+    if (phase !== 'reading' || engineRef.current === null || buzzingRef.current) return;
+    buzzingRef.current = true;
+    try {
+      const snapshot = engineRef.current.buzz();
+      if (keyboardEnter) answerEnterBlockedRef.current = true;
+      setBuzz(snapshot);
+      setPhase(transitionPhase(phase, 'BUZZ', mode));
+    } catch (reason: unknown) {
+      buzzingRef.current = false;
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   }, [mode, phase]);
 
   const persistResolvedAttempt = useCallback(async (
@@ -209,7 +242,13 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
         : updateSessionProgress(session, consumedQuestionCount, null);
     }
 
-    await persistAttemptAndSessionTransaction(attempt, nextSession, studyState);
+    await persistAttemptAndSessionTransaction(
+      attempt,
+      nextSession,
+      studyState,
+      undefined,
+      sessionGenerationRef.current ?? undefined,
+    );
     setSession(nextSession);
     setModeState(nextModeState);
   }, [mode, modeState, session]);
@@ -323,6 +362,18 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
     }
   }, [mode, phase, questionIndex, questions.length, session]);
 
+  useEffect(() => {
+    if (phase !== 'result') return;
+    const handleResultEnter = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      if (event.repeat || resultEnterBlockedRef.current) return;
+      void next();
+    };
+    window.addEventListener('keydown', handleResultEnter);
+    return () => window.removeEventListener('keydown', handleResultEnter);
+  }, [next, phase]);
+
   const endManually = useCallback(async () => {
     if (savingRef.current || session === null || session.endReason !== null) return;
     savingRef.current = true;
@@ -335,7 +386,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
         new Date().toISOString(),
         { modeResult: terminatedState?.modeResult ?? session.modeResult },
       );
-      await new SessionRepository().put(ended);
+      await new SessionRepository().put(ended, sessionGenerationRef.current ?? undefined);
       setModeState(terminatedState);
       setSession(ended);
       setPhase('finished');
@@ -407,7 +458,22 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
 
       {phase === 'reading' && (
         <div className="buzz-dock">
-          <button className="buzz-button" type="button" onPointerDown={doBuzz}>BUZZ</button>
+          <button
+            className="buzz-button"
+            type="button"
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              doBuzz(false);
+            }}
+            onKeyDown={(event) => {
+              if ((event.key !== 'Enter' && event.key !== ' ') || event.repeat) return;
+              event.preventDefault();
+              doBuzz(event.key === 'Enter');
+            }}
+          >
+            BUZZ
+          </button>
           <div className="secondary-actions">
             <button type="button" onClick={() => void saveOutcome('pass')}>Pass</button>
             {mode !== 'survival' && <button type="button" onClick={() => void saveOutcome('skip')}>Skip</button>}
@@ -416,9 +482,32 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
       )}
 
       {phase === 'answering' && (
-        <form className="answer-panel" onSubmit={(event) => { event.preventDefault(); void submitAnswer(); }}>
+        <form
+          className="answer-panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (answerComposingRef.current || answerEnterBlockedRef.current) return;
+            void submitAnswer();
+          }}
+        >
           <label htmlFor="answer-input">回答</label>
-          <input id="answer-input" autoFocus value={answer} onChange={(event) => setAnswer(event.target.value)} autoComplete="off" />
+          <input
+            id="answer-input"
+            autoFocus
+            value={answer}
+            onChange={(event) => setAnswer(event.target.value)}
+            onCompositionStart={() => { answerComposingRef.current = true; }}
+            onCompositionEnd={() => { answerComposingRef.current = false; }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              if (event.nativeEvent.isComposing || answerComposingRef.current || answerEnterBlockedRef.current) {
+                event.preventDefault();
+                return;
+              }
+              resultEnterBlockedRef.current = true;
+            }}
+            autoComplete="off"
+          />
           <button className="primary-button" type="submit">判定</button>
           {(mode === 'kimari' || mode === 'survival') && (
             <button type="button" onClick={() => void saveOutcome('pass')}>Pass</button>

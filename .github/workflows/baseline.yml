@@ -52,7 +52,11 @@ jobs:
           test -f dist/manifest.webmanifest
           test -f dist/sw.js
           compgen -G 'dist/workbox-*.js' > /dev/null
+          compgen -G 'dist/assets/*.js' > /dev/null
+          grep -q 'index.html' dist/sw.js
+          grep -Eq 'assets/[^"'"']+\.js' dist/sw.js
           find dist -maxdepth 2 -type f -print | sort | tee baseline-artifacts/dist-files.txt
+          grep -oE 'assets/[^"'"']+\.(js|css)' dist/sw.js | sort -u | tee baseline-artifacts/offline-precache-assets.txt
 
       - name: Record success
         if: success()

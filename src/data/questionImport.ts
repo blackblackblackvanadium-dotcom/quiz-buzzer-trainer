@@ -7,6 +7,7 @@ import {
   questionKey,
 } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
+import { withExclusiveAppWrite } from './concurrency';
 import {
   parseQuestionDatasetCsv,
   parseQuestionDatasetJson,
@@ -102,7 +103,7 @@ async function commitPreparedDataset(
   const issues = flattenIssues(dataset);
   assertNoBlockingQualityIssues(issues);
 
-  return database.transaction('rw', database.questions, database.attempts, async () => {
+  return withExclusiveAppWrite(() => database.transaction('rw', database.questions, database.attempts, async () => {
     const existing = await database.questions.toArray();
     const existingByKey = new Map(existing.map((record) => [record.key, record]));
 
@@ -147,7 +148,7 @@ async function commitPreparedDataset(
 
     const exhaustive: never = mode;
     throw new Error(`Unsupported Question import mode: ${String(exhaustive)}`);
-  });
+  }));
 }
 
 /** Canonical JSON import. All three DATA ImportModes are available. */

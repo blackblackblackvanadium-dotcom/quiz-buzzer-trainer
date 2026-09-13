@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { QuizMode } from './domain/types';
 import { bootstrapLocalData } from './data/bootstrap';
+import { subscribeToDatabaseReplacement } from './data/concurrency';
 import { PlayPage } from './pages/PlayPage';
 import { RecordsPage } from './pages/RecordsPage';
 import { MorePage } from './pages/MorePage';
@@ -10,25 +11,84 @@ import './styles/app.css';
 
 type Tab = 'play' | 'study' | 'records' | 'more';
 
+function onlineNow(): boolean {
+  return typeof navigator === 'undefined' ? true : navigator.onLine;
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('play');
   const [mode, setMode] = useState<QuizMode>('normal');
   const [sessionMode, setSessionMode] = useState<QuizMode | null>(null);
   const [ready, setReady] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [externalDbChange, setExternalDbChange] = useState(false);
+  const [online, setOnline] = useState(onlineNow);
   const [updateController, setUpdateController] = useState<PwaUpdateController | null>(null);
 
-  useEffect(() => {
-    bootstrapLocalData().then(() => setReady(true)).catch(console.error);
-    registerPwa(setUpdateController);
+  const runBootstrap = useCallback(async () => {
+    setReady(false);
+    setBootstrapError(null);
+    try {
+      await bootstrapLocalData();
+      setReady(true);
+    } catch (error) {
+      setBootstrapError(error instanceof Error ? error.message : String(error));
+    }
   }, []);
+
+  useEffect(() => {
+    void runBootstrap();
+    registerPwa(setUpdateController);
+
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    const unsubscribeReplacement = subscribeToDatabaseReplacement(() => {
+      setSessionMode(null);
+      setExternalDbChange(true);
+    });
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      unsubscribeReplacement();
+    };
+  }, [runBootstrap]);
 
   const modes = useMemo(() => (['normal', 'kimari', 'review', 'survival'] as const), []);
   const activeSession = sessionMode !== null;
+
+  if (externalDbChange) {
+    return (
+      <main className="app-shell fatal-shell">
+        <div className="error-card" role="alert">
+          <h1>ローカルデータが更新されました</h1>
+          <p>別タブでRestoreが完了したため、このタブの古いSessionは続行できません。</p>
+          <button className="primary-button" type="button" onClick={() => window.location.reload()}>再読み込み</button>
+        </div>
+      </main>
+    );
+  }
+
+  if (bootstrapError !== null) {
+    return (
+      <main className="app-shell fatal-shell">
+        <div className="error-card" role="alert">
+          <h1>ローカルデータベースを開けません</h1>
+          <p>{bootstrapError}</p>
+          <button className="primary-button" type="button" onClick={() => void runBootstrap()}>再試行</button>
+        </div>
+      </main>
+    );
+  }
 
   if (!ready) return <main className="app-shell"><p>Initializing local database…</p></main>;
 
   return (
     <div className="app-shell">
+      {!online && <div className="offline-indicator" role="status">オフライン — ローカルデータで利用中</div>}
       {!activeSession && <header className="app-header"><strong>Quiz Buzzer Trainer</strong><span>Phase 1</span></header>}
 
       {updateController !== null && (

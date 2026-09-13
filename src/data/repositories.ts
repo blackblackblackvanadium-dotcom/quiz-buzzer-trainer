@@ -8,6 +8,7 @@ import type {
 } from '../domain/types';
 import { questionKey } from '../domain/types';
 import { db, toQuestionRecord, type QbtDatabase, type QuestionRecord } from './db';
+import { assertDatabaseGeneration, withExclusiveAppWrite } from './concurrency';
 
 function assertInputRevisionUniqueness(questions: readonly QuestionRevision[]): void {
   const keys = questions.map(questionKey);
@@ -53,6 +54,10 @@ function assertSessionPersistenceInvariant(session: QuizSession): void {
   }
 }
 
+function assertExpectedGeneration(expectedGeneration: string | undefined): void {
+  if (expectedGeneration !== undefined) assertDatabaseGeneration(expectedGeneration);
+}
+
 export class QuestionRepository {
   constructor(private readonly database: QbtDatabase = db) {}
 
@@ -67,23 +72,25 @@ export class QuestionRepository {
     const records = questions.map(toQuestionRecord);
     const questionIds = [...new Set(questions.map((question) => question.questionId))];
 
-    await this.database.transaction('rw', this.database.questions, async () => {
-      const existingByKey = await this.database.questions.bulkGet(keys);
-      const collisionIndex = existingByKey.findIndex((record) => record !== undefined);
-      if (collisionIndex >= 0) throw new Error(`Question revision is immutable and already exists: ${keys[collisionIndex]}`);
+    await withExclusiveAppWrite(async () => {
+      await this.database.transaction('rw', this.database.questions, async () => {
+        const existingByKey = await this.database.questions.bulkGet(keys);
+        const collisionIndex = existingByKey.findIndex((record) => record !== undefined);
+        if (collisionIndex >= 0) throw new Error(`Question revision is immutable and already exists: ${keys[collisionIndex]}`);
 
-      const existingForLogicalQuestions = questionIds.length === 0
-        ? []
-        : await this.database.questions.where('questionId').anyOf(questionIds).toArray();
-      const numericCollision = questions.find((incoming) =>
-        existingForLogicalQuestions.some((existing) =>
-          existing.questionId === incoming.questionId && existing.revision === incoming.revision,
-        ),
-      );
-      if (numericCollision !== undefined) {
-        throw new Error(`Question numeric revision already exists: ${numericCollision.questionId} revision ${numericCollision.revision}`);
-      }
-      await this.database.questions.bulkAdd(records);
+        const existingForLogicalQuestions = questionIds.length === 0
+          ? []
+          : await this.database.questions.where('questionId').anyOf(questionIds).toArray();
+        const numericCollision = questions.find((incoming) =>
+          existingForLogicalQuestions.some((existing) =>
+            existing.questionId === incoming.questionId && existing.revision === incoming.revision,
+          ),
+        );
+        if (numericCollision !== undefined) {
+          throw new Error(`Question numeric revision already exists: ${numericCollision.questionId} revision ${numericCollision.revision}`);
+        }
+        await this.database.questions.bulkAdd(records);
+      });
     });
   }
 
@@ -98,7 +105,7 @@ export class AttemptRepository {
 
   async add(attempt: PersistedAttempt): Promise<void> {
     assertPersistedAttemptContract(attempt);
-    await this.database.attempts.add(attempt);
+    await withExclusiveAppWrite(() => this.database.attempts.add(attempt).then(() => undefined));
   }
 
   async list(): Promise<Attempt[]> {
@@ -109,14 +116,20 @@ export class AttemptRepository {
 export class SessionRepository {
   constructor(private readonly database: QbtDatabase = db) {}
 
-  async create(session: QuizSession): Promise<void> {
+  async create(session: QuizSession, expectedGeneration?: string): Promise<void> {
     assertSessionPersistenceInvariant(session);
-    await this.database.sessions.add(session);
+    await withExclusiveAppWrite(async () => {
+      assertExpectedGeneration(expectedGeneration);
+      await this.database.sessions.add(session);
+    });
   }
 
-  async put(session: QuizSession): Promise<void> {
+  async put(session: QuizSession, expectedGeneration?: string): Promise<void> {
     assertSessionPersistenceInvariant(session);
-    await this.database.sessions.put(session);
+    await withExclusiveAppWrite(async () => {
+      assertExpectedGeneration(expectedGeneration);
+      await this.database.sessions.put(session);
+    });
   }
 
   async get(sessionId: string): Promise<QuizSession | undefined> {
@@ -132,7 +145,7 @@ export class StudyStateRepository {
   }
 
   async put(state: StudyState): Promise<void> {
-    await this.database.studyStates.put(state);
+    await withExclusiveAppWrite(() => this.database.studyStates.put(state).then(() => undefined));
   }
 
   async list(): Promise<StudyState[]> {
@@ -148,11 +161,15 @@ export async function persistAttemptTransaction(
   attempt: PersistedAttempt,
   studyState: StudyState | null,
   database: QbtDatabase = db,
+  expectedGeneration?: string,
 ): Promise<void> {
   assertPersistedAttemptContract(attempt);
-  await database.transaction('rw', database.attempts, database.studyStates, async () => {
-    await database.attempts.add(attempt);
-    if (studyState !== null) await database.studyStates.put(studyState);
+  await withExclusiveAppWrite(async () => {
+    assertExpectedGeneration(expectedGeneration);
+    await database.transaction('rw', database.attempts, database.studyStates, async () => {
+      await database.attempts.add(attempt);
+      if (studyState !== null) await database.studyStates.put(studyState);
+    });
   });
 }
 
@@ -162,15 +179,19 @@ export async function persistAttemptAndSessionTransaction(
   session: QuizSession,
   studyState: StudyState | null = null,
   database: QbtDatabase = db,
+  expectedGeneration?: string,
 ): Promise<void> {
   assertPersistedAttemptContract(attempt);
   assertSessionPersistenceInvariant(session);
   if (attempt.sessionId !== session.sessionId) throw new Error('Attempt and Session IDs do not match');
 
-  await database.transaction('rw', database.attempts, database.sessions, database.studyStates, async () => {
-    await database.attempts.add(attempt);
-    await database.sessions.put(session);
-    if (studyState !== null) await database.studyStates.put(studyState);
+  await withExclusiveAppWrite(async () => {
+    assertExpectedGeneration(expectedGeneration);
+    await database.transaction('rw', database.attempts, database.sessions, database.studyStates, async () => {
+      await database.attempts.add(attempt);
+      await database.sessions.put(session);
+      if (studyState !== null) await database.studyStates.put(studyState);
+    });
   });
 }
 

@@ -7,14 +7,20 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; margin: 0; }
-button, input { font: inherit; }
-button { cursor: pointer; }
+html, body, #root { min-height: 100%; width: 100%; max-width: 100%; margin: 0; overflow-x: clip; }
+button, input { font: inherit; min-width: 0; max-width: 100%; }
+button { cursor: pointer; overflow-wrap: anywhere; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 
 .app-shell {
+  width: 100%;
+  max-width: 100%;
   min-height: 100dvh;
-  padding: max(16px, env(safe-area-inset-top)) 16px calc(84px + env(safe-area-inset-bottom));
+  overflow-x: clip;
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: calc(84px + env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
   background: #f8fafc;
 }
 
@@ -22,12 +28,15 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 8px;
   max-width: 760px;
   margin: 0 auto 16px;
 }
+.app-header > * { min-width: 0; }
 .app-header span, .muted { color: #64748b; }
 
-.content, .mode-picker, .update-banner { max-width: 760px; margin-inline: auto; }
+.content, .mode-picker, .update-banner, .offline-indicator { max-width: 760px; margin-inline: auto; }
+.content, .screen, .mode-start-panel, .settings-card, .result-card, .error-card { min-width: 0; }
 .screen { min-height: 62dvh; }
 
 .mode-picker {
@@ -46,6 +55,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .selected { border-color: #111827 !important; background: #e2e8f0 !important; font-weight: 700; }
 
 .play-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.play-header > * { min-width: 0; }
 .spec-badge { font-size: 12px; background: #fef3c7; color: #92400e; padding: 4px 8px; border-radius: 999px; }
 
 .question-stage {
@@ -55,12 +65,14 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   padding: 32px 4px;
 }
 .question-text {
+  max-width: 100%;
   margin: 0;
   font-size: clamp(24px, 7vw, 40px);
   line-height: 1.65;
   font-weight: 700;
   letter-spacing: .03em;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .primary-button {
@@ -75,8 +87,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 .buzz-dock {
   position: fixed;
-  left: 16px;
-  right: 16px;
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
   bottom: max(16px, env(safe-area-inset-bottom));
   max-width: 760px;
   margin-inline: auto;
@@ -95,7 +107,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 }
 .secondary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 
-.answer-panel { display: grid; gap: 10px; }
+.answer-panel { display: grid; gap: 10px; min-width: 0; }
 .answer-panel input {
   width: 100%;
   min-height: 54px;
@@ -107,6 +119,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .answer-panel input:focus { outline: 3px solid #bfdbfe; border-color: #2563eb; }
 
 .result-card, .settings-card, .error-card {
+  max-width: 100%;
+  overflow-wrap: anywhere;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 20px;
@@ -114,14 +128,16 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   box-shadow: 0 8px 30px rgb(15 23 42 / .06);
 }
 .error-card { color: #991b1b; border-color: #fecaca; }
+.fatal-shell { display: grid; align-content: start; }
+.fatal-shell .error-card { width: min(760px, 100%); margin-inline: auto; }
 
 .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.metric-grid article { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; }
+.metric-grid article { min-width: 0; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; overflow-wrap: anywhere; }
 .metric-grid span, .metric-grid strong { display: block; }
 .metric-grid strong { font-size: 22px; margin-top: 5px; }
 
-.file-label { display: inline-block; margin-top: 8px; }
-.file-label input { display: block; margin-top: 8px; max-width: 100%; }
+.file-label { display: inline-block; max-width: 100%; margin-top: 8px; }
+.file-label input { display: block; width: 100%; margin-top: 8px; max-width: 100%; }
 
 .bottom-nav {
   position: fixed;
@@ -129,17 +145,21 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   right: 0;
   bottom: 0;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
-  padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+  padding-top: 8px;
+  padding-right: max(8px, env(safe-area-inset-right));
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  padding-left: max(8px, env(safe-area-inset-left));
   background: rgb(248 250 252 / .96);
   border-top: 1px solid #e2e8f0;
   backdrop-filter: blur(12px);
 }
-.bottom-nav button { padding: 10px 4px; border: 0; background: transparent; border-radius: 12px; }
+.bottom-nav button { padding: 10px 2px; border: 0; background: transparent; border-radius: 12px; }
 
 .update-banner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -150,8 +170,36 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   margin-bottom: 12px;
 }
 
+.offline-indicator {
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #475569;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 359px) {
+  .app-shell {
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-left: max(12px, env(safe-area-inset-left));
+  }
+  .buzz-dock {
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+  }
+  .result-card, .settings-card, .error-card { padding: 16px; }
+}
+
 @media (min-width: 720px) {
-  .app-shell { padding-inline: 24px; }
+  .app-shell {
+    padding-right: max(24px, env(safe-area-inset-right));
+    padding-left: max(24px, env(safe-area-inset-left));
+  }
   .mode-picker { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
