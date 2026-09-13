@@ -6,6 +6,17 @@ export type AttemptId = string;
 export const QUESTION_SCHEMA_VERSION = 1 as const;
 export const QUESTION_DATASET_FORMAT = 'qbt-question-dataset' as const;
 export const QUESTION_DATASET_SCHEMA_VERSION = 1 as const;
+export const QUALITY_PROFILE_VERSION = 'qbt-quality-v1' as const;
+export const DERIVED_GENERATOR_VERSION = 'qbt-derived-v1' as const;
+
+export type ProvenanceMethod =
+  | 'human_verified'
+  | 'human_unverified'
+  | 'imported'
+  | 'computed'
+  | 'rule_inferred'
+  | 'ai_inferred'
+  | 'unknown';
 
 export type AnswerRelation =
   | 'alias'
@@ -28,7 +39,7 @@ export type RejectionReason =
   | 'other';
 
 export interface Provenance {
-  readonly method: string;
+  readonly method: ProvenanceMethod;
   readonly confidence?: number | undefined;
   readonly verifiedBy?: string | undefined;
   readonly verifiedAt?: string | undefined;
@@ -130,7 +141,7 @@ export interface QualityInfo {
   readonly status: QualityStatus;
   readonly issues: readonly QualityIssue[];
   readonly lastCheckedAt?: string | undefined;
-  readonly qualityProfileVersion?: string | undefined;
+  readonly qualityProfileVersion: string;
 }
 
 export type QuestionStatus = 'draft' | 'active' | 'suspended' | 'deprecated';
@@ -170,7 +181,7 @@ export interface QuestionRecordV1 {
   readonly extensions?: Readonly<Record<string, unknown>> | undefined;
 }
 
-/** Compatibility name used by the application layer; the canonical shape is QuestionRecordV1. */
+/** Compatibility name used by the application layer; canonical storage is QuestionRecordV1. */
 export type QuestionRevision = QuestionRecordV1;
 
 export interface QuestionDatasetV1 {
@@ -185,6 +196,22 @@ export interface QuestionDatasetV1 {
   };
   readonly questions: readonly QuestionRecordV1[];
   readonly checksum?: string | undefined;
+}
+
+export type QuestionImportMode = 'insert_only' | 'merge' | 'restore';
+
+export interface QuestionImportIssue {
+  readonly questionId: QuestionId;
+  readonly revisionId: RevisionId;
+  readonly issue: QualityIssue;
+}
+
+export interface QuestionImportResult {
+  readonly mode: QuestionImportMode;
+  readonly inserted: number;
+  readonly skipped: number;
+  readonly replaced: number;
+  readonly issues: readonly QuestionImportIssue[];
 }
 
 export const quizModes = ['normal', 'kimari', 'review', 'survival', 'study'] as const;
