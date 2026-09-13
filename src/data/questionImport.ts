@@ -18,6 +18,15 @@ function flattenIssues(dataset: QuestionDatasetV1): QuestionImportIssue[] {
   );
 }
 
+function assertNoBlockingQualityIssues(issues: readonly QuestionImportIssue[]): void {
+  const blocking = issues.find((entry) => entry.issue.severity === 'error');
+  if (blocking !== undefined) {
+    throw new Error(
+      `Question import blocked by quality error ${blocking.issue.code}: ${blocking.questionId}::${blocking.revisionId}`,
+    );
+  }
+}
+
 function assertNoNumericRevisionCollision(
   incoming: readonly QuestionDatasetV1['questions'][number][],
   existing: readonly { questionId: string; revisionId: string; revision: number }[],
@@ -48,6 +57,7 @@ export async function importQuestionDataset(
   const records = dataset.questions.map(toQuestionRecord);
   const incomingKeys = new Set(dataset.questions.map(questionKey));
   const issues = flattenIssues(dataset);
+  assertNoBlockingQualityIssues(issues);
 
   return database.transaction('rw', database.questions, database.attempts, async () => {
     const existing = await database.questions.toArray();
