@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  Attempt,
   BuzzSnapshot,
   KimariReference,
+  PersistedAttempt,
   QuestionRevision,
   QuizMode,
   QuizPhase,
@@ -66,7 +66,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
   const [reader, setReader] = useState<TypewriterSnapshot>(EMPTY_READER);
   const [buzz, setBuzz] = useState<BuzzSnapshot | null>(null);
   const [answer, setAnswer] = useState('');
-  const [lastAttempt, setLastAttempt] = useState<Attempt | null>(null);
+  const [lastAttempt, setLastAttempt] = useState<PersistedAttempt | null>(null);
   const [session, setSession] = useState<QuizSession | null>(null);
   const [modeState, setModeState] = useState<ModeSessionState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +111,6 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
         targetQuestionCount: selected.length,
         modeResult: competitiveState?.modeResult ?? null,
       });
-      // put() is intentionally idempotent under React StrictMode's effect replay.
       await sessionRepo.put(created);
       if (cancelled) return;
       setModeState(competitiveState);
@@ -175,7 +174,7 @@ export function PlayPage({ mode, onSessionEnd }: PlayPageProps) {
   }, [mode, phase]);
 
   const persistResolvedAttempt = useCallback(async (
-    attempt: Attempt,
+    attempt: PersistedAttempt,
     studyState: StudyState | null,
   ): Promise<void> => {
     if (session === null) throw new Error('Session is not initialized');
