@@ -35,7 +35,7 @@ jobs:
           test -f /tmp/baseline60/dist/sw.js
           test -f /tmp/baseline60/dist/manifest.webmanifest
 
-      - name: Normalize harness continuation after held-Enter check
+      - name: Normalize acceptance harness for deterministic browser control
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -54,6 +54,18 @@ jobs:
           progression_end = text.index(progression_end_marker, progression_start)
           replacement = '''  await cdp.evaluate("[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '終了').click()");\n  await cdp.waitFor("document.body.innerText.includes('Session ended')");\n'''
           text = text[:progression_start] + replacement + text[progression_end:]
+
+          offline_marker = "  await cdp.call('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });"
+          offline_override = offline_marker + "\n  await cdp.call('Network.overrideNetworkState', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });"
+          if text.count(offline_marker) != 1:
+              raise SystemExit('Expected offline network marker not found exactly once')
+          text = text.replace(offline_marker, offline_override)
+
+          online_marker = "  await cdp.call('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });"
+          online_override = online_marker + "\n  await cdp.call('Network.overrideNetworkState', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });"
+          if text.count(online_marker) != 1:
+              raise SystemExit('Expected online network marker not found exactly once')
+          text = text.replace(online_marker, online_override)
           path.write_text(text)
           PY
 
