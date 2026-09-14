@@ -37,4 +37,34 @@ replacement = """  await dbFailure.screenshot('07-db-open-failure.png');
   assert(evidence.checks.dbOpenFailure.pass, 'DB open failure explicit error/retry acceptance failed');
 """
 text = text[:start] + replacement + text[end:]
+
+restore_start_marker = "  await restoreTab.waitFor(\"document.body.innerText.includes('復元が完了しました。再読み込みしてください。')\", 20000);\n"
+restore_end_marker = "  assert(evidence.checks.crossTabRestore.pass, 'Cross-tab Restore stale Session acceptance failed');\n"
+restore_start = text.index(restore_start_marker)
+restore_end = text.index(restore_end_marker, restore_start) + len(restore_end_marker)
+restore_replacement = """  await ime.waitFor("document.body.innerText.includes('ローカルデータが更新されました')", 20000);
+  const primaryAfterRestore = await ime.evaluate(`({
+    alert: document.querySelector('[role="alert"]')?.innerText ?? '',
+    buzz: !!document.querySelector('.buzz-button'),
+    reload: [...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '再読み込み'),
+    generation: localStorage.getItem('qbt-phase1-db-generation')
+  })`);
+  const restoreTabState = await restoreTab.evaluate(`({
+    successMessage: document.body.innerText.includes('復元が完了しました。再読み込みしてください。'),
+    externalUpdateMessage: document.body.innerText.includes('ローカルデータが更新されました'),
+    body: document.body.innerText.slice(0, 500),
+    generation: localStorage.getItem('qbt-phase1-db-generation')
+  })`);
+  const restoreCommitted = primaryAfterRestore.alert.includes('ローカルデータが更新されました') && primaryAfterRestore.generation !== null;
+  evidence.checks.crossTabRestore = {
+    environment: 'Two real Chrome pages in one browser profile sharing IndexedDB/localStorage/BroadcastChannel',
+    operation: 'Tab A starts active Normal Session; Tab B performs actual UI Replace Restore using a valid backup File',
+    expected: 'Successful Restore advances DB generation; Tab A immediately stops old Session and requires reload; stale BUZZ/play cannot continue',
+    actual: { activeBeforeRestore, restoreCommitted, primaryAfterRestore, restoreTabState },
+    pass: restoreCommitted && !primaryAfterRestore.buzz && primaryAfterRestore.reload,
+  };
+  assert(evidence.checks.crossTabRestore.pass, 'Cross-tab Restore stale Session acceptance failed');
+"""
+text = text[:restore_start] + restore_replacement + text[restore_end:]
+
 path.write_text(text)
