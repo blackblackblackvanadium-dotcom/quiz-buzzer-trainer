@@ -55,17 +55,41 @@ jobs:
           replacement = '''  await cdp.evaluate("[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '終了').click()");\n  await cdp.waitFor("document.body.innerText.includes('Session ended')");\n'''
           text = text[:progression_start] + replacement + text[progression_end:]
 
-          offline_marker = "  await cdp.call('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });"
-          offline_override = offline_marker + "\n  await cdp.call('Network.overrideNetworkState', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });"
-          if text.count(offline_marker) != 1:
-              raise SystemExit('Expected offline network marker not found exactly once')
-          text = text.replace(offline_marker, offline_override)
+          offline_start_marker = "  await cdp.call('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });"
+          waiting_start_marker = '''  await cdp.evaluate("window.__acceptanceSentinel = 'active-session-preserved'");'''
+          offline_start = text.index(offline_start_marker)
+          waiting_start = text.index(waiting_start_marker, offline_start)
+          offline_block = r'''  await new Promise((resolvePromise, rejectPromise) => {
+    server.close((error) => error ? rejectPromise(error) : resolvePromise());
+  });
+  evidence.checks.offlineTransport = { originServerClosed: true };
+  await cdp.call('Page.navigate', { url: 'about:blank' });
+  await cdp.waitFor("location.href === 'about:blank'");
+  await cdp.call('Page.navigate', { url: `${origin}/` });
+  await cdp.waitFor("[...document.querySelectorAll('button')].some((button) => button.textContent.includes('Normalを開始'))", 20000);
+  evidence.checks.offlineColdStart = await cdp.evaluate("({ navigatorOnline: navigator.onLine, normalStart: [...document.querySelectorAll('button')].some((button) => button.textContent.includes('Normalを開始')), controller: !!navigator.serviceWorker.controller, htmlScrollWidth: document.documentElement.scrollWidth })");
+  const offline = evidence.checks.offlineColdStart;
+  assert(offline.normalStart && offline.controller, 'Offline cold-start shell failed with origin server stopped');
+  assert(offline.htmlScrollWidth <= 320, 'Offline cold-start has horizontal overflow');
+  await cdp.evaluate("window.dispatchEvent(new Event('offline'))");
+  await cdp.waitFor("document.body.innerText.includes('オフライン — ローカルデータで利用中')");
+  evidence.checks.offlineIndicator = await cdp.evaluate("({ indicator: document.body.innerText.includes('オフライン — ローカルデータで利用中') })");
+  assert(evidence.checks.offlineIndicator.indicator, 'Offline indicator did not appear after browser offline event');
+  await cdp.evaluate("[...document.querySelectorAll('button')].find((button) => button.textContent.includes('Normalを開始')).click()");
+  await cdp.waitFor("[...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '開始')");
+  await cdp.evaluate("[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '開始').click()");
+  await cdp.waitFor("!!document.querySelector('.buzz-button')", 15000);
+  evidence.checks.offlineCoreQuiz = await cdp.evaluate("({ buzz: !!document.querySelector('.buzz-button'), question: !!document.querySelector('.question-text'), indicator: document.body.innerText.includes('オフライン — ローカルデータで利用中') })");
+  assert(evidence.checks.offlineCoreQuiz.buzz && evidence.checks.offlineCoreQuiz.question && evidence.checks.offlineCoreQuiz.indicator, 'Core quiz cannot start from offline cold-start');
+  await cdp.screenshot('04-offline-core-quiz.png');
 
-          online_marker = "  await cdp.call('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });"
-          online_override = online_marker + "\n  await cdp.call('Network.overrideNetworkState', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });"
-          if text.count(online_marker) != 1:
-              raise SystemExit('Expected online network marker not found exactly once')
-          text = text.replace(online_marker, online_override)
+  await new Promise((resolvePromise, rejectPromise) => {
+    server.once('error', rejectPromise);
+    server.listen(address.port, '127.0.0.1', resolvePromise);
+  });
+  await cdp.evaluate("window.dispatchEvent(new Event('online'))");
+'''
+          text = text[:offline_start] + offline_block + text[waiting_start:]
           path.write_text(text)
           PY
 
