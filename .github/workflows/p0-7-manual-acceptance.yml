@@ -60,6 +60,16 @@ jobs:
       - name: Run IME DB-open and cross-tab Restore acceptance
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/p0-7-acceptance-supplement.mjs')
+          text = path.read_text()
+          old = "  const target = await waitForJson(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`);"
+          new = "  const response = await fetch(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' });\n  if (!response.ok) throw new Error(`Chrome target creation failed: ${response.status}`);\n  const target = await response.json();"
+          if old not in text:
+              raise SystemExit('supplement Chrome target patch marker missing')
+          path.write_text(text.replace(old, new, 1))
+          PY
           node scripts/p0-7-acceptance-supplement.mjs /tmp/baseline60/dist p0-7-supplement
           python3 - <<'PY'
           import json
