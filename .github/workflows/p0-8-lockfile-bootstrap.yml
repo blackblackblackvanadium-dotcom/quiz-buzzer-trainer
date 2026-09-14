@@ -5,36 +5,105 @@ on:
     branches: [p0-8-lockfile-bootstrap]
 
 permissions:
-  contents: read
+  actions: read
+  contents: write
 
 jobs:
   lockfile:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Checkout frozen release candidate source
+      - name: Checkout lockfile branch
         uses: actions/checkout@v4
         with:
-          ref: 2cb63eebd34208b9dbd68936c19bacb208f221bd
+          ref: p0-8-lockfile-bootstrap
+          fetch-depth: 1
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Generate package-lock only
+      - name: Recover exact generated lockfile from bootstrap artifact
+        id: recover
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          test -f package-lock.json
-          sha256sum package-lock.json | tee package-lock.sha256
+          EXPECTED_SHA='559a091ee783ce801ea673c8415a86be68a2201bd0a8715727a059381b0f3dbe'
+          if test -f package-lock.json; then
+            echo "${EXPECTED_SHA}  package-lock.json" | sha256sum -c -
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          rm -rf /tmp/p0-8-lockfile
+          mkdir -p /tmp/p0-8-lockfile
+          gh run download 34814121309 \
+            -n p0-8-lockfile-bootstrap-34814121309 \
+            -D /tmp/p0-8-lockfile
+          test -f /tmp/p0-8-lockfile/package-lock.json
+          echo "${EXPECTED_SHA}  /tmp/p0-8-lockfile/package-lock.json" | sha256sum -c -
+          cp /tmp/p0-8-lockfile/package-lock.json package-lock.json
           node -e "const p=require('./package-lock.json'); if(p.lockfileVersion!==3) process.exit(1);"
 
-      - name: Upload lockfile bootstrap artifact
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json
+          git commit -m 'chore(release): pin package-lock for P0 #8'
+          git push origin HEAD:p0-8-lockfile-bootstrap
+          echo 'ready=false' >> "$GITHUB_OUTPUT"
+
+      - name: Prepare verification evidence
+        if: steps.recover.outputs.ready == 'true'
+        run: mkdir -p p0-8-lockfile-evidence/logs p0-8-lockfile-evidence/results p0-8-lockfile-evidence/artifacts
+
+      - name: npm ci
+        if: steps.recover.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          npm ci 2>&1 | tee p0-8-lockfile-evidence/logs/01-npm-ci.log
+
+      - name: Typecheck
+        if: steps.recover.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee p0-8-lockfile-evidence/logs/02-typecheck.log
+
+      - name: Test
+        if: steps.recover.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee p0-8-lockfile-evidence/logs/03-test.log
+
+      - name: Build
+        if: steps.recover.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee p0-8-lockfile-evidence/logs/04-build.log
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -f dist/sw.js
+          compgen -G 'dist/workbox-*.js' > /dev/null
+          compgen -G 'dist/assets/*.js' > /dev/null
+
+      - name: Record verification result
+        if: steps.recover.outputs.ready == 'true' && success()
+        run: |
+          sha256sum package-lock.json > p0-8-lockfile-evidence/artifacts/package-lock.sha256
+          printf 'npm_ci=PASS\ntypecheck=PASS\ntest=PASS\nbuild=PASS\n' > p0-8-lockfile-evidence/results/gates.txt
+          printf 'head_sha=%s\nrun_id=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > p0-8-lockfile-evidence/results/run.txt
+
+      - name: Upload verification evidence
+        if: steps.recover.outputs.ready == 'true' && always()
         uses: actions/upload-artifact@v4
         with:
-          name: p0-8-lockfile-bootstrap-${{ github.run_id }}
+          name: p0-8-lockfile-verification-${{ github.run_id }}
           if-no-files-found: error
           path: |
-            package-lock.json
-            package-lock.sha256
+            p0-8-lockfile-evidence/**
+            dist/**
