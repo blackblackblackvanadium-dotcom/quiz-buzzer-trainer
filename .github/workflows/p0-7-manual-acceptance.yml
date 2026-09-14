@@ -48,13 +48,12 @@ jobs:
           end = text.index(end_marker, start)
           text = text[:start] + '''  await cdp.evaluate("document.querySelector('.answer-panel').requestSubmit()");\n''' + text[end:]
 
-          old_progression = '''  await cdp.evaluate("document.querySelector('.result-card .primary-button').click()");
-          await cdp.waitFor("document.body.innerText.includes('Session complete')");'''
-          new_progression = '''  await cdp.evaluate("[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '終了').click()");
-          await cdp.waitFor("document.body.innerText.includes('Session ended')");'''
-          if text.count(old_progression) != 1:
-              raise SystemExit('Expected result-to-session progression block not found exactly once')
-          text = text.replace(old_progression, new_progression)
+          progression_start_marker = '''  await cdp.evaluate("document.querySelector('.result-card .primary-button').click()");'''
+          progression_end_marker = '''  await cdp.evaluate("[...document.querySelectorAll('button')].find((button) => button.textContent.includes('メニューへ戻る')).click()");'''
+          progression_start = text.index(progression_start_marker)
+          progression_end = text.index(progression_end_marker, progression_start)
+          replacement = '''  await cdp.evaluate("[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '終了').click()");\n  await cdp.waitFor("document.body.innerText.includes('Session ended')");\n'''
+          text = text[:progression_start] + replacement + text[progression_end:]
           path.write_text(text)
           PY
 
