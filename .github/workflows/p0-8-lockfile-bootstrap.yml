@@ -8,6 +8,7 @@ permissions:
   actions: read
   contents: write
 
+# P0 #8 verification trigger after the generated lockfile has been pinned.
 jobs:
   lockfile:
     runs-on: ubuntu-latest
