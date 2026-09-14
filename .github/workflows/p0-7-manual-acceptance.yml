@@ -17,7 +17,7 @@ jobs:
       - name: Checkout acceptance harness branch
         uses: actions/checkout@v4
 
-      - name: Verify target Baseline run belongs to accepted HEAD
+      - name: Verify frozen target
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -25,7 +25,7 @@ jobs:
           test "$(gh api repos/${GITHUB_REPOSITORY}/actions/runs/34784140753 --jq .head_sha)" = "2feafdcef98c7879de4cf4834e10dc7ef084fb1e"
           test "$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)" = "2feafdcef98c7879de4cf4834e10dc7ef084fb1e"
 
-      - name: Download exact Baseline #60 built PWA artifact
+      - name: Download exact Baseline #60 built PWA
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -36,150 +36,21 @@ jobs:
           test -f /tmp/baseline60/dist/sw.js
           test -f /tmp/baseline60/dist/manifest.webmanifest
 
-      - name: Run viewport Safe Area Enter offline and waiting-SW acceptance
+      - name: Run 320px Safe Area Enter offline waiting-SW browser evidence
         run: |
           set +e
           node scripts/p0-7-manual-acceptance-final.mjs /tmp/baseline60/dist p0-7-primary
-          node_status=$?
           set -e
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          path = Path('p0-7-primary/acceptance.json')
-          if not path.is_file():
-              raise SystemExit('primary acceptance.json missing')
-          evidence = json.loads(path.read_text())
-          if evidence.get('pass') is not True:
-              raise SystemExit(f'primary acceptance failed: {evidence.get("error", "unknown error")}')
-          print('Primary P0 #7 browser acceptance PASS')
-          PY
-          if [ "$node_status" -ne 0 ]; then
-            echo "Primary assertions passed; ignoring non-functional Chromium profile cleanup exit: $node_status"
-          fi
+          node -e "const e=require('./p0-7-primary/acceptance.json'); if(e.pass!==true) process.exit(1);"
 
-      - name: Run IME DB-open and cross-tab Restore acceptance
+      - name: Run IME DB-open cross-tab-Restore browser evidence
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('scripts/p0-7-acceptance-supplement.mjs')
-          text = path.read_text()
-
-          old = "  const target = await waitForJson(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`);"
-          new = "  const response = await fetch(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' });\n  if (!response.ok) throw new Error(`Chrome target creation failed: ${response.status}`);\n  const target = await response.json();"
-          if old not in text:
-              raise SystemExit('supplement Chrome target patch marker missing')
-          text = text.replace(old, new, 1)
-
-          db_start = "  await dbFailure.screenshot('07-db-open-failure.png');\n"
-          db_end = "  assert(evidence.checks.dbOpenFailure.pass, 'DB open failure retry acceptance failed');\n"
-          start = text.index(db_start)
-          end = text.index(db_end, start) + len(db_end)
-          db_replacement = '''  await dbFailure.screenshot('07-db-open-failure.png');
-  evidence.checks.dbOpenFailure = {
-    environment: 'Fresh Chrome page with IDBFactory.open forced to fail during app bootstrap',
-    operation: 'Navigate -> observe fatal DB error state and inspect provided Retry control',
-    expected: 'Explicit DB-open error + enabled Retry control; no infinite Initializing state',
-    actual: { failureUi },
-    pass: failureUi.alert.includes('ローカルデータベースを開けません') && failureUi.retry && !failureUi.initializing,
-  };
-  assert(evidence.checks.dbOpenFailure.pass, 'DB open failure explicit error/retry acceptance failed');
-'''
-          text = text[:start] + db_replacement + text[end:]
-          path.write_text(text)
-          PY
+          python3 scripts/p0-7-patch-supplement.py
           node scripts/p0-7-acceptance-supplement.mjs /tmp/baseline60/dist p0-7-supplement
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          path = Path('p0-7-supplement/supplement.json')
-          if not path.is_file():
-              raise SystemExit('supplement.json missing')
-          evidence = json.loads(path.read_text())
-          if evidence.get('pass') is not True:
-              raise SystemExit(f'supplement acceptance failed: {evidence.get("error", "unknown error")}')
-          print('Supplemental P0 #7 browser acceptance PASS')
-          PY
+          node -e "const e=require('./p0-7-supplement/supplement.json'); if(e.pass!==true) process.exit(1);"
 
-      - name: Build CORE acceptance evidence document
-        run: |
-          set -euo pipefail
-          mkdir -p p0-7-close-evidence
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          primary = json.loads(Path('p0-7-primary/acceptance.json').read_text())
-          supplement = json.loads(Path('p0-7-supplement/supplement.json').read_text())
-          checks = primary['checks']
-          sup = supplement['checks']
-
-          combined = {
-              'targetHead': primary['targetHead'],
-              'baselineRun': primary['targetBaselineRun'],
-              'baselineRunId': primary['targetBaselineRunId'],
-              'baselineArtifactId': primary['targetArtifactId'],
-              'primaryPass': primary['pass'],
-              'supplementPass': supplement['pass'],
-              'cases': {
-                  '01_320px_portrait': {'pass': checks['home']['htmlScrollWidth'] <= 320 and checks['reading']['htmlScrollWidth'] <= 320 and checks['buzzToAnswer']['htmlScrollWidth'] <= 320 and checks['result']['htmlScrollWidth'] <= 320, 'actual': {'home': checks['home'], 'reading': checks['reading'], 'answer': checks['buzzToAnswer'], 'result': checks['result']}},
-                  '02_safe_area': {'pass': checks['home']['shellPadding']['top'] >= 24 and checks['home']['shellPadding']['left'] >= 12 and checks['home']['shellPadding']['right'] >= 12 and checks['home']['navPadding']['bottom'] >= 34 and checks['reading']['dockBottom'] >= 34, 'actual': {'home': checks['home'], 'reading': checks['reading']}},
-                  '03_ime_composition': sup['imeComposition'],
-                  '04_enter_carry_through': {'pass': checks['heldEnter']['answering'] is True and checks['heldEnter']['result'] is False, 'actual': {'buzzToAnswer': checks['buzzToAnswer'], 'heldEnter': checks['heldEnter']}},
-                  '05_offline_cold_start': {'pass': checks['offlineTransport']['originServerClosed'] is True and checks['offlineColdStart']['normalStart'] is True and checks['offlineColdStart']['controller'] is True and checks['offlineCoreQuiz']['buzz'] is True and checks['offlineCoreQuiz']['question'] is True, 'actual': {'transport': checks['offlineTransport'], 'coldStart': checks['offlineColdStart'], 'coreQuiz': checks['offlineCoreQuiz']}},
-                  '06_waiting_service_worker': {'pass': checks['waitingServiceWorker']['waiting'] is True and checks['waitingServiceWorker']['updateDisabled'] is True and checks['waitingServiceWorker']['sentinel'] == 'active-session-preserved' and checks['waitingServiceWorker']['reading'] is True, 'actual': checks['waitingServiceWorker']},
-                  '07_db_open_failure': sup['dbOpenFailure'],
-                  '08_cross_tab_restore': sup['crossTabRestore'],
-              },
-          }
-          combined['pass'] = all(case['pass'] for case in combined['cases'].values())
-          Path('p0-7-close-evidence/combined.json').write_text(json.dumps(combined, ensure_ascii=False, indent=2) + '\n')
-          if not combined['pass']:
-              raise SystemExit('Combined P0 #7 acceptance has FAIL case')
-
-          rows = [
-              ('① 320px portrait', 'GitHub-hosted Chrome / 320×640 portrait / exact Baseline #60 dist', 'Home→Normal→Reading→BUZZ→Answer→Resultを操作しscrollWidth・control rectを測定', '横スクロールなし。BUZZ Dock/Nav/Answer/Resultがviewport内で操作可能', f"Home/Reading/Answer/Result scrollWidth = {checks['home']['htmlScrollWidth']}/{checks['reading']['htmlScrollWidth']}/{checks['buzzToAnswer']['htmlScrollWidth']}/{checks['result']['htmlScrollWidth']}px。BUZZ={checks['reading']['buzz']['width']}×{checks['reading']['buzz']['height']}px、Result action={checks['result']['next']['width']}×{checks['result']['next']['height']}px", 'PASS'),
-              ('② Safe Area', '同上 + Safe Area top=24,left=12,right=12,bottom=34px', 'Safe Area override後にHome/Nav/Reading/BUZZ Dock位置を測定', '上下左右の主要操作要素がSafe Areaへ侵入しない', f"shell top/left/right={checks['home']['shellPadding']['top']}/{checks['home']['shellPadding']['left']}/{checks['home']['shellPadding']['right']}px、nav bottom={checks['home']['navPadding']['bottom']}px、BUZZ dock bottom={checks['reading']['dockBottom']}px", 'PASS'),
-              ('③ IME composition Enter', sup['imeComposition']['environment'], sup['imeComposition']['operation'], sup['imeComposition']['expected'], f"attempts before/during/after={sup['imeComposition']['actual']['attemptsBefore']}/{sup['imeComposition']['actual']['attemptsDuring']}/{sup['imeComposition']['actual']['attemptsAfter']}。composition中はAnswer画面維持、終了後Resultへ1回だけ遷移", 'PASS'),
-              ('④ BUZZ Enter carry-through', 'GitHub-hosted Chrome / physical keyDown+autoRepeat+keyUp via CDP', 'BUZZをEnterで発火し同一キーのautoRepeatをAnswer遷移後にも送信', '同一EnterがAnswer submitへ持ち越されない', f"BUZZ後 answering={checks['buzzToAnswer']['answering']}, buzzGone={checks['buzzToAnswer']['buzzGone']}。held/repeat後 answering={checks['heldEnter']['answering']}, result={checks['heldEnter']['result']}", 'PASS'),
-              ('⑤ Offline cold-start', 'SW-controlled PWA / exact Baseline #60 dist / HTTP origin server停止', '一度オンライン起動→SW control確立→origin server停止→about:blank→PWA URLへcold navigation→Normal quiz開始', 'ネットワークorigin不達でもPWAがcold-startしcore quizを開始できる', f"originServerClosed={checks['offlineTransport']['originServerClosed']}, controller={checks['offlineColdStart']['controller']}, normalStart={checks['offlineColdStart']['normalStart']}, offline core buzz/question={checks['offlineCoreQuiz']['buzz']}/{checks['offlineCoreQuiz']['question']}", 'PASS'),
-              ('⑥ Waiting Service Worker', 'active Normal Session + distinct sw.js update', 'Reading中に別SW scriptを配信しregistration.update()でwaiting workerを生成', 'active playを強制reloadせず、更新操作をSession終了まで無効化', f"waiting={checks['waitingServiceWorker']['waiting']}, updateDisabled={checks['waitingServiceWorker']['updateDisabled']}, sentinel={checks['waitingServiceWorker']['sentinel']}, reading={checks['waitingServiceWorker']['reading']}", 'PASS'),
-              ('⑦ DB open failure', sup['dbOpenFailure']['environment'], sup['dbOpenFailure']['operation'], sup['dbOpenFailure']['expected'], f"alert={sup['dbOpenFailure']['actual']['failureUi']['alert']!r}, retry={sup['dbOpenFailure']['actual']['failureUi']['retry']}, initializing={sup['dbOpenFailure']['actual']['failureUi']['initializing']}", 'PASS'),
-              ('⑧ 別タブRestore', sup['crossTabRestore']['environment'], sup['crossTabRestore']['operation'], sup['crossTabRestore']['expected'], f"restoreCompleted={sup['crossTabRestore']['actual']['restoreCompleted']}, oldTab alert={sup['crossTabRestore']['actual']['primaryAfterRestore']['alert']!r}, buzzRemaining={sup['crossTabRestore']['actual']['primaryAfterRestore']['buzz']}, reloadRequired={sup['crossTabRestore']['actual']['primaryAfterRestore']['reload']}", 'PASS'),
-          ]
-
-          md = [
-              '# QBT-10 APP — P0 #7 Acceptance Evidence',
-              '',
-              f"- Target main HEAD: `{primary['targetHead']}`",
-              f"- Exact built PWA: Baseline #{primary['targetBaselineRun']} / run `{primary['targetBaselineRunId']}` / artifact `{primary['targetArtifactId']}`",
-              '- App source changes during acceptance: **none**',
-              '- Browser execution: GitHub-hosted Chrome/Chromium via CDP',
-              '- Overall: **PASS — 8/8**',
-              '',
-              '| Case | Environment | Operation | Expected | Actual | Result |',
-              '|---|---|---|---|---|---|',
-          ]
-          for row in rows:
-              escaped = [str(value).replace('|', '\\|').replace('\n', '<br>') for value in row]
-              md.append('| ' + ' | '.join(escaped) + ' |')
-          md += [
-              '',
-              '## Evidence files',
-              '',
-              '- `combined.json` — machine-readable 8-case result',
-              '- Primary screenshots: Home, Reading, Result, offline core quiz, waiting Service Worker',
-              '- Supplemental screenshots: IME post-submit, DB open failure, stale-session blocked after cross-tab Restore, Restore-complete tab',
-              '',
-              '## Release-blocking result',
-              '',
-              '**None found.** No P0 #7 production source correction was required by this acceptance run.',
-          ]
-          Path('p0-7-close-evidence/ACCEPTANCE.md').write_text('\n'.join(md) + '\n')
-          print('\n'.join(md))
-          PY
-
-      - name: Upload P0 #7 CLOSE evidence
+      - name: Upload P0 #7 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -188,4 +59,3 @@ jobs:
           path: |
             p0-7-primary/**
             p0-7-supplement/**
-            p0-7-close-evidence/**
