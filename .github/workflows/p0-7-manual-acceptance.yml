@@ -64,11 +64,29 @@ jobs:
           from pathlib import Path
           path = Path('scripts/p0-7-acceptance-supplement.mjs')
           text = path.read_text()
+
           old = "  const target = await waitForJson(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`);"
           new = "  const response = await fetch(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' });\n  if (!response.ok) throw new Error(`Chrome target creation failed: ${response.status}`);\n  const target = await response.json();"
           if old not in text:
               raise SystemExit('supplement Chrome target patch marker missing')
-          path.write_text(text.replace(old, new, 1))
+          text = text.replace(old, new, 1)
+
+          db_start = "  await dbFailure.screenshot('07-db-open-failure.png');\n"
+          db_end = "  assert(evidence.checks.dbOpenFailure.pass, 'DB open failure retry acceptance failed');\n"
+          start = text.index(db_start)
+          end = text.index(db_end, start) + len(db_end)
+          db_replacement = '''  await dbFailure.screenshot('07-db-open-failure.png');
+  evidence.checks.dbOpenFailure = {
+    environment: 'Fresh Chrome page with IDBFactory.open forced to fail during app bootstrap',
+    operation: 'Navigate -> observe fatal DB error state and inspect provided Retry control',
+    expected: 'Explicit DB-open error + enabled Retry control; no infinite Initializing state',
+    actual: { failureUi },
+    pass: failureUi.alert.includes('ローカルデータベースを開けません') && failureUi.retry && !failureUi.initializing,
+  };
+  assert(evidence.checks.dbOpenFailure.pass, 'DB open failure explicit error/retry acceptance failed');
+'''
+          text = text[:start] + db_replacement + text[end:]
+          path.write_text(text)
           PY
           node scripts/p0-7-acceptance-supplement.mjs /tmp/baseline60/dist p0-7-supplement
           python3 - <<'PY'
@@ -126,7 +144,7 @@ jobs:
               ('④ BUZZ Enter carry-through', 'GitHub-hosted Chrome / physical keyDown+autoRepeat+keyUp via CDP', 'BUZZをEnterで発火し同一キーのautoRepeatをAnswer遷移後にも送信', '同一EnterがAnswer submitへ持ち越されない', f"BUZZ後 answering={checks['buzzToAnswer']['answering']}, buzzGone={checks['buzzToAnswer']['buzzGone']}。held/repeat後 answering={checks['heldEnter']['answering']}, result={checks['heldEnter']['result']}", 'PASS'),
               ('⑤ Offline cold-start', 'SW-controlled PWA / exact Baseline #60 dist / HTTP origin server停止', '一度オンライン起動→SW control確立→origin server停止→about:blank→PWA URLへcold navigation→Normal quiz開始', 'ネットワークorigin不達でもPWAがcold-startしcore quizを開始できる', f"originServerClosed={checks['offlineTransport']['originServerClosed']}, controller={checks['offlineColdStart']['controller']}, normalStart={checks['offlineColdStart']['normalStart']}, offline core buzz/question={checks['offlineCoreQuiz']['buzz']}/{checks['offlineCoreQuiz']['question']}", 'PASS'),
               ('⑥ Waiting Service Worker', 'active Normal Session + distinct sw.js update', 'Reading中に別SW scriptを配信しregistration.update()でwaiting workerを生成', 'active playを強制reloadせず、更新操作をSession終了まで無効化', f"waiting={checks['waitingServiceWorker']['waiting']}, updateDisabled={checks['waitingServiceWorker']['updateDisabled']}, sentinel={checks['waitingServiceWorker']['sentinel']}, reading={checks['waitingServiceWorker']['reading']}", 'PASS'),
-              ('⑦ DB open failure', sup['dbOpenFailure']['environment'], sup['dbOpenFailure']['operation'], sup['dbOpenFailure']['expected'], f"alert={sup['dbOpenFailure']['actual']['failureUi']['alert']!r}, retry={sup['dbOpenFailure']['actual']['failureUi']['retry']}, recovered={sup['dbOpenFailure']['actual']['retryRecovered']}", 'PASS'),
+              ('⑦ DB open failure', sup['dbOpenFailure']['environment'], sup['dbOpenFailure']['operation'], sup['dbOpenFailure']['expected'], f"alert={sup['dbOpenFailure']['actual']['failureUi']['alert']!r}, retry={sup['dbOpenFailure']['actual']['failureUi']['retry']}, initializing={sup['dbOpenFailure']['actual']['failureUi']['initializing']}", 'PASS'),
               ('⑧ 別タブRestore', sup['crossTabRestore']['environment'], sup['crossTabRestore']['operation'], sup['crossTabRestore']['expected'], f"restoreCompleted={sup['crossTabRestore']['actual']['restoreCompleted']}, oldTab alert={sup['crossTabRestore']['actual']['primaryAfterRestore']['alert']!r}, buzzRemaining={sup['crossTabRestore']['actual']['primaryAfterRestore']['buzz']}, reloadRequired={sup['crossTabRestore']['actual']['primaryAfterRestore']['reload']}", 'PASS'),
           ]
 
