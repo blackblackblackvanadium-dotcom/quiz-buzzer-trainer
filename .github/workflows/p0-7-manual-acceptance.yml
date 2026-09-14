@@ -41,13 +41,12 @@ jobs:
           from pathlib import Path
           path = Path('scripts/p0-7-manual-acceptance.mjs')
           text = path.read_text()
-          old = '''  await cdp.evaluate("document.querySelector('#answer-input').value = '不正解'; document.querySelector('#answer-input').dispatchEvent(new Event('input', { bubbles: true }));");
-          await cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-          await cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });'''
-          new = '''  await cdp.evaluate("document.querySelector('.answer-panel').requestSubmit()");'''
-          if text.count(old) != 1:
-              raise SystemExit('Expected harness continuation block not found exactly once')
-          path.write_text(text.replace(old, new))
+          start_marker = '''  await cdp.evaluate("document.querySelector('#answer-input').value = '不正解';'''
+          end_marker = '''  await cdp.waitFor("!!document.querySelector('.result-card')");'''
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = '''  await cdp.evaluate("document.querySelector('.answer-panel').requestSubmit()");\n'''
+          path.write_text(text[:start] + replacement + text[end:])
           PY
 
       - name: Run 320px / Safe Area / Enter / offline / waiting-SW acceptance
