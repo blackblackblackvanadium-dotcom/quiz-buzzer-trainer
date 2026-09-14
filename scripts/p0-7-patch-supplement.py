@@ -16,6 +16,12 @@ if menu_old not in text:
     raise SystemExit('Study-to-Play navigation marker missing')
 text = text.replace(menu_old, menu_new, 1)
 
+failure_expr_old = "    initializing: document.body.innerText.includes('Initializing local database')\n  })()`);"
+failure_expr_new = "    initializing: document.body.innerText.includes('Initializing local database')\n  })`);"
+if failure_expr_old not in text:
+    raise SystemExit('DB failure object-expression marker missing')
+text = text.replace(failure_expr_old, failure_expr_new, 1)
+
 start_marker = "  await dbFailure.screenshot('07-db-open-failure.png');\n"
 end_marker = "  assert(evidence.checks.dbOpenFailure.pass, 'DB open failure retry acceptance failed');\n"
 start = text.index(start_marker)
