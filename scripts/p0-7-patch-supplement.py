@@ -10,6 +10,12 @@ if old in text:
 elif new not in text:
     raise SystemExit('Chrome target creation marker missing')
 
+menu_old = "  await ime.evaluate(\"[...document.querySelectorAll('button')].find((b) => b.textContent.includes('メニューへ戻る')).click()\");\n  await ime.waitFor(\"[...document.querySelectorAll('button')].some((b) => b.textContent.includes('Normalを開始'))\");"
+menu_new = "  await ime.evaluate(\"[...document.querySelectorAll('button')].find((b) => b.textContent.includes('メニューへ戻る')).click()\");\n  await ime.waitFor(\"[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Play')\");\n  await ime.evaluate(\"[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Play').click()\");\n  await ime.waitFor(\"[...document.querySelectorAll('button')].some((b) => b.textContent.includes('Normalを開始'))\");"
+if menu_old not in text:
+    raise SystemExit('Study-to-Play navigation marker missing')
+text = text.replace(menu_old, menu_new, 1)
+
 start_marker = "  await dbFailure.screenshot('07-db-open-failure.png');\n"
 end_marker = "  assert(evidence.checks.dbOpenFailure.pass, 'DB open failure retry acceptance failed');\n"
 start = text.index(start_marker)
