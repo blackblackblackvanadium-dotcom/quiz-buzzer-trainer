@@ -1,0 +1,49 @@
+name: P0-7 Manual Acceptance Evidence
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  acceptance:
+    if: github.head_ref == 'p0-7-acceptance-evidence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout acceptance harness branch
+        uses: actions/checkout@v4
+
+      - name: Verify target Baseline run belongs to accepted HEAD
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/${GITHUB_REPOSITORY}/actions/runs/34784140753 --jq .head_sha)" = "2feafdcef98c7879de4cf4834e10dc7ef084fb1e"
+
+      - name: Download exact Baseline #60 built PWA artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/baseline60
+          gh run download 34784140753 -n baseline-evidence-34784140753 -D /tmp/baseline60
+          test -f /tmp/baseline60/dist/index.html
+          test -f /tmp/baseline60/dist/sw.js
+          test -f /tmp/baseline60/dist/manifest.webmanifest
+
+      - name: Run 320px / Safe Area / Enter / offline / waiting-SW acceptance
+        run: |
+          set -euo pipefail
+          node scripts/p0-7-manual-acceptance.mjs /tmp/baseline60/dist p0-7-evidence
+
+      - name: Upload P0 #7 acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-7-manual-acceptance-${{ github.run_id }}
+          if-no-files-found: error
+          path: p0-7-evidence/**
