@@ -1,0 +1,61 @@
+name: P0-7 Manual Acceptance Evidence
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  acceptance:
+    if: github.head_ref == 'p0-7-acceptance-evidence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout acceptance harness branch
+        uses: actions/checkout@v4
+
+      - name: Verify frozen target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/${GITHUB_REPOSITORY}/actions/runs/34784140753 --jq .head_sha)" = "2feafdcef98c7879de4cf4834e10dc7ef084fb1e"
+          test "$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)" = "2feafdcef98c7879de4cf4834e10dc7ef084fb1e"
+
+      - name: Download exact Baseline #60 built PWA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/baseline60
+          gh run download 34784140753 -n baseline-evidence-34784140753 -D /tmp/baseline60
+          test -f /tmp/baseline60/dist/index.html
+          test -f /tmp/baseline60/dist/sw.js
+          test -f /tmp/baseline60/dist/manifest.webmanifest
+
+      - name: Run 320px Safe Area Enter offline waiting-SW browser evidence
+        run: |
+          set +e
+          node scripts/p0-7-manual-acceptance-final.mjs /tmp/baseline60/dist p0-7-primary
+          set -e
+          node -e "const e=require('./p0-7-primary/acceptance.json'); if(e.pass!==true) process.exit(1);"
+
+      - name: Run IME DB-open cross-tab-Restore browser evidence
+        run: |
+          set -euo pipefail
+          python3 scripts/p0-7-patch-supplement.py
+          node scripts/p0-7-acceptance-supplement.mjs /tmp/baseline60/dist p0-7-supplement
+          node -e "const e=require('./p0-7-supplement/supplement.json'); if(e.pass!==true) process.exit(1);"
+
+      - name: Upload P0 #7 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-7-close-evidence-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            p0-7-primary/**
+            p0-7-supplement/**
