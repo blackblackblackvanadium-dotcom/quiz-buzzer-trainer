@@ -1,0 +1,71 @@
+name: Visual Design Review Evidence
+
+on:
+  push:
+    branches: [visual-design-review-evidence]
+
+permissions:
+  contents: read
+
+jobs:
+  visual-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout evidence harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout exact production Source of Truth
+        uses: actions/checkout@v4
+        with:
+          ref: 6e2d74aaabcc8a0041934378d4b81f3c682879b8
+          path: app
+
+      - name: Verify target commit and production source isolation
+        run: |
+          set -euo pipefail
+          test "$(git -C app rev-parse HEAD)" = "6e2d74aaabcc8a0041934378d4b81f3c682879b8"
+          test -f app/package-lock.json
+          test -f harness/scripts/visual-design-review-evidence.mjs
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Clean install from fixed lockfile
+        working-directory: app
+        run: npm ci
+
+      - name: Production build
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm run build 2>&1 | tee ../production-build.log
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -f dist/sw.js
+
+      - name: Execute three-viewport visual regression
+        run: |
+          set -euo pipefail
+          node harness/scripts/visual-design-review-evidence.mjs app/dist visual-review-evidence 6e2d74aaabcc8a0041934378d4b81f3c682879b8
+          node -e "const e=require('./visual-review-evidence/visual-review.json'); if(e.pass!==true) process.exit(1);"
+
+      - name: Record metadata
+        if: always()
+        run: |
+          mkdir -p visual-review-evidence/meta
+          printf 'target_commit=6e2d74aaabcc8a0041934378d4b81f3c682879b8\nactions_run_id=%s\nharness_commit=%s\n' "${GITHUB_RUN_ID}" "${GITHUB_SHA}" > visual-review-evidence/meta/run.txt
+          cp production-build.log visual-review-evidence/meta/production-build.log 2>/dev/null || true
+
+      - name: Upload final Visual Design Review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-design-review-6e2d74aa-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          path: visual-review-evidence/**
