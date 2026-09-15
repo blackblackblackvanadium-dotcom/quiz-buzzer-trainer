@@ -35,6 +35,12 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Japanese font for legible screenshots
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y fonts-noto-cjk
+          fc-cache -f
+
       - name: Clean install from fixed lockfile
         working-directory: app
         run: npm ci
