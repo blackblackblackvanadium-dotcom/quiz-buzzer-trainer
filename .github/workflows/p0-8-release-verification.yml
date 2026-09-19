@@ -1,0 +1,203 @@
+name: P0-8 Release Verification
+
+on:
+  push:
+    branches: [p0-8-release-verification]
+
+permissions:
+  contents: read
+
+jobs:
+  release-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: 6e2d74aaabcc8a0041934378d4b81f3c682879b8
+      LOCK_SHA256: 559a091ee783ce801ea673c8415a86be68a2201bd0a8715727a059381b0f3dbe
+      EVIDENCE_DIR: ${{ github.workspace }}/evidence
+    steps:
+      - name: Checkout verification harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout exact production Source of Truth
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          path: app
+
+      - name: Verify frozen release candidate identity
+        id: identity
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/identity
+          test "$(git -C app rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "$(git -C app status --porcelain)"
+          test -f app/package-lock.json
+          test "$(sha256sum app/package-lock.json | awk '{print $1}')" = "$LOCK_SHA256"
+          printf 'target_sha=%s\nlock_sha256=%s\nharness_sha=%s\n' "$TARGET_SHA" "$LOCK_SHA256" "$GITHUB_SHA" | tee evidence/identity/release-candidate.txt
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: AC-01 clean npm ci
+        id: ac01_install
+        working-directory: app
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/AC-01"
+          node --version | tee "$EVIDENCE_DIR/AC-01/node-version.txt"
+          npm --version | tee "$EVIDENCE_DIR/AC-01/npm-version.txt"
+          npm ci 2>&1 | tee "$EVIDENCE_DIR/AC-01/npm-ci.log"
+          test -z "$(git status --porcelain package-lock.json)"
+
+      - name: AC-01 typecheck
+        id: ac01_typecheck
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm run typecheck 2>&1 | tee "$EVIDENCE_DIR/AC-01/typecheck.log"
+
+      - name: AC-01 full test run 1
+        id: ac01_test1
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm test -- --reporter=json --outputFile="$EVIDENCE_DIR/AC-01/test-results-1.json" 2>&1 | tee "$EVIDENCE_DIR/AC-01/test-run-1.log"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const p=JSON.parse(readFileSync(process.env.EVIDENCE_DIR+'/AC-01/test-results-1.json','utf8'));
+          if(p.success!==true || p.numFailedTests!==0 || p.numPendingTests!==0 || p.numFailedTestSuites!==0) {
+            console.error(p); process.exit(1);
+          }
+          NODE
+
+      - name: AC-01 full test run 2 non-flake confirmation
+        id: ac01_test2
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm test -- --reporter=json --outputFile="$EVIDENCE_DIR/AC-01/test-results-2.json" 2>&1 | tee "$EVIDENCE_DIR/AC-01/test-run-2.log"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const a=JSON.parse(readFileSync(process.env.EVIDENCE_DIR+'/AC-01/test-results-1.json','utf8'));
+          const b=JSON.parse(readFileSync(process.env.EVIDENCE_DIR+'/AC-01/test-results-2.json','utf8'));
+          const keys=['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTotalTestSuites','numPassedTestSuites','numFailedTestSuites'];
+          for(const k of keys) if(a[k]!==b[k]) { console.error('non-deterministic test count',k,a[k],b[k]); process.exit(1); }
+          if(b.success!==true || b.numFailedTests!==0 || b.numPendingTests!==0 || b.numFailedTestSuites!==0) process.exit(1);
+          NODE
+
+      - name: AC-01 production build
+        id: ac01_build
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm run build 2>&1 | tee "$EVIDENCE_DIR/AC-01/production-build.log"
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -f dist/sw.js
+          find dist -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/AC-01/dist-sha256.txt"
+
+      - name: AC-01 production preview smoke
+        id: ac01_preview
+        working-directory: app
+        run: |
+          set -euo pipefail
+          (npm run preview -- --host 127.0.0.1 --port 4173 > "$EVIDENCE_DIR/AC-01/preview.log" 2>&1 & echo $! > "$EVIDENCE_DIR/AC-01/preview.pid")
+          for i in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:4173/ > "$EVIDENCE_DIR/AC-01/preview-index.html"; then break; fi
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:4173/manifest.webmanifest > "$EVIDENCE_DIR/AC-01/preview-manifest.webmanifest"
+          curl -fsS http://127.0.0.1:4173/sw.js > "$EVIDENCE_DIR/AC-01/preview-sw.js"
+          curl -fsS http://127.0.0.1:4173/icon.svg > "$EVIDENCE_DIR/AC-01/preview-icon.svg"
+          kill "$(cat "$EVIDENCE_DIR/AC-01/preview.pid")" || true
+
+      - name: AC-01 finalize
+        id: ac01
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const p=JSON.parse(readFileSync(process.env.EVIDENCE_DIR+'/AC-01/test-results-2.json','utf8'));
+          const report={ac:'AC-01',pass:true,targetCommit:process.env.TARGET_SHA,install:'npm ci',typecheck:'PASS',tests:{total:p.numTotalTests,passed:p.numPassedTests,failed:p.numFailedTests,skipped:p.numPendingTests,flaky:0,knownFailure:0,runs:2},build:'PASS',preview:'PASS'};
+          writeFileSync(process.env.EVIDENCE_DIR+'/AC-01/ac01-report.json',JSON.stringify(report,null,2)+'\n');
+          NODE
+
+      - name: AC-20 Release Metadata
+        id: ac20
+        run: |
+          set -euo pipefail
+          node harness/scripts/p0-8-static-evidence.mjs ac20 app evidence "$TARGET_SHA"
+          node -e "const r=require('./evidence/AC-20/ac20-report.json'); if(r.pass!==true) process.exit(1)"
+
+      - name: AC-19 Manifest and Scope Validation
+        id: ac19
+        run: |
+          set -euo pipefail
+          node harness/scripts/p0-8-static-evidence.mjs ac19 app evidence "$TARGET_SHA"
+
+      - name: Prepare release-only tests
+        run: |
+          set -euo pipefail
+          mkdir -p app/release-tests
+          cp harness/release-tests/ac07.test.ts app/release-tests/
+          cp harness/release-tests/ac08.test.ts app/release-tests/
+          cp harness/release-tests/ac09.test.ts app/release-tests/
+          test -z "$(git -C app status --porcelain src)"
+
+      - name: AC-07 Backup Round Trip
+        id: ac07
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npx vitest run release-tests/ac07.test.ts --reporter=json --outputFile="$EVIDENCE_DIR/AC-07/vitest.json" 2>&1 | tee "$EVIDENCE_DIR/AC-07/vitest.log"
+          node -e "const r=require(process.env.EVIDENCE_DIR+'/AC-07/ac07-validation-report.json'); if(r.pass!==true) process.exit(1)"
+
+      - name: AC-08 Replace Restore
+        id: ac08
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npx vitest run release-tests/ac08.test.ts --reporter=json --outputFile="$EVIDENCE_DIR/AC-08/vitest.json" 2>&1 | tee "$EVIDENCE_DIR/AC-08/vitest.log"
+          node -e "const r=require(process.env.EVIDENCE_DIR+'/AC-08/ac08-integrity-report.json'); if(r.pass!==true) process.exit(1)"
+
+      - name: AC-09 Corrupted Backup Rejection
+        id: ac09
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npx vitest run release-tests/ac09.test.ts --reporter=json --outputFile="$EVIDENCE_DIR/AC-09/vitest.json" 2>&1 | tee "$EVIDENCE_DIR/AC-09/vitest.log"
+          node -e "const r=require(process.env.EVIDENCE_DIR+'/AC-09/ac09-invalid-input-results.json'); if(r.pass!==true) process.exit(1)"
+
+      - name: Record executed AC status
+        if: always()
+        env:
+          AC01: ${{ steps.ac01.outcome }}
+          AC20: ${{ steps.ac20.outcome }}
+          AC19: ${{ steps.ac19.outcome }}
+          AC07: ${{ steps.ac07.outcome }}
+          AC08: ${{ steps.ac08.outcome }}
+          AC09: ${{ steps.ac09.outcome }}
+        run: |
+          mkdir -p evidence
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const order=['AC-01','AC-20','AC-19','AC-07','AC-08','AC-09'];
+          const raw={'AC-01':process.env.AC01,'AC-20':process.env.AC20,'AC-19':process.env.AC19,'AC-07':process.env.AC07,'AC-08':process.env.AC08,'AC-09':process.env.AC09};
+          const results=order.map(ac=>({ac,outcome:raw[ac]??'not_executed'}));
+          const firstFailure=results.find(x=>x.outcome==='failure'||x.outcome==='cancelled')?.ac??null;
+          writeFileSync('evidence/ac-results.json',JSON.stringify({targetCommit:process.env.TARGET_SHA,runId:process.env.GITHUB_RUN_ID,order,results,firstFailure,releaseVerificationComplete:false},null,2)+'\n');
+          NODE
+
+      - name: Upload P0 #8 Release Verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-8-release-verification-6e2d74aa-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          path: evidence/**
