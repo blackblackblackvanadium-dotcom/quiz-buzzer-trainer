@@ -154,6 +154,7 @@ jobs:
         working-directory: app
         run: |
           set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/AC-07"
           npx vitest run release-tests/ac07.test.ts --reporter=json --outputFile="$EVIDENCE_DIR/AC-07/vitest.json" 2>&1 | tee "$EVIDENCE_DIR/AC-07/vitest.log"
           node -e "const r=require(process.env.EVIDENCE_DIR+'/AC-07/ac07-validation-report.json'); if(r.pass!==true) process.exit(1)"
 
@@ -162,6 +163,7 @@ jobs:
         working-directory: app
         run: |
           set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/AC-08"
           npx vitest run release-tests/ac08.test.ts --reporter=json --outputFile="$EVIDENCE_DIR/AC-08/vitest.json" 2>&1 | tee "$EVIDENCE_DIR/AC-08/vitest.log"
           node -e "const r=require(process.env.EVIDENCE_DIR+'/AC-08/ac08-integrity-report.json'); if(r.pass!==true) process.exit(1)"
 
@@ -170,6 +172,7 @@ jobs:
         working-directory: app
         run: |
           set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/AC-09"
           npx vitest run release-tests/ac09.test.ts --reporter=json --outputFile="$EVIDENCE_DIR/AC-09/vitest.json" 2>&1 | tee "$EVIDENCE_DIR/AC-09/vitest.log"
           node -e "const r=require(process.env.EVIDENCE_DIR+'/AC-09/ac09-invalid-input-results.json'); if(r.pass!==true) process.exit(1)"
 
