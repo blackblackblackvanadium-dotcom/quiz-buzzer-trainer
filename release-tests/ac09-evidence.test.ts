@@ -97,7 +97,7 @@ it('AC-09 corrupted backup rejection evidence matrix', async () => {
 
   const source = db('qbt-ac09-evidence-source');
   await seed(source, 'source');
-  const valid = await createBackup(source);
+  const valid = parseBackupJson(serializeBackup(await createBackup(source)));
   await writeJson('valid-backup.json', valid);
 
   const results: Array<Record<string, unknown>> = [];
