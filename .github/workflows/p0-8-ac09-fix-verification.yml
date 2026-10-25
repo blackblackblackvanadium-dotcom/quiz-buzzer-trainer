@@ -37,11 +37,14 @@ jobs:
           test -z "$(git -C app status --porcelain)"
           test "$(sha256sum app/package-lock.json | awk '{print $1}')" = "$LOCK_SHA256"
           printf 'target_sha=%s\nharness_sha=%s\npackage_lock_sha256=%s\n'             "$TARGET_SHA" "$GITHUB_SHA" "$LOCK_SHA256" | tee evidence/meta/candidate.txt
-          git -C app diff --name-status 6e2d74aaabcc8a0041934378d4b81f3c682879b8 "$TARGET_SHA"             | tee evidence/meta/main-diff.txt
-          if git -C app diff --name-only 6e2d74aaabcc8a0041934378d4b81f3c682879b8 "$TARGET_SHA"             | grep -E '^(package-lock\.json|package\.json|src/(?!backup/backup\.ts)|tests/(?!backup/restoreReferentialIntegrity\.test\.ts))'; then
-            echo "Unexpected production candidate scope" >&2
-            exit 1
-          fi
+          git -C app fetch --no-tags --depth=1 origin 6e2d74aaabcc8a0041934378d4b81f3c682879b8
+          git -C app diff --name-status 6e2d74aaabcc8a0041934378d4b81f3c682879b8 "$TARGET_SHA" | tee evidence/meta/main-diff.txt
+          git -C app diff --name-only 6e2d74aaabcc8a0041934378d4b81f3c682879b8 "$TARGET_SHA" | sort > evidence/meta/changed-files.txt
+          printf '%s\n' \
+            'src/backup/backup.ts' \
+            'tests/backup/restoreReferentialIntegrity.test.ts' \
+            > evidence/meta/expected-changed-files.txt
+          diff -u evidence/meta/expected-changed-files.txt evidence/meta/changed-files.txt
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
