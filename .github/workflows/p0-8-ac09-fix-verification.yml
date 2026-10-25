@@ -1,0 +1,188 @@
+name: P0-8 AC-09 Fix Verification
+
+on:
+  push:
+    branches:
+      - fix/p0-8-ac09-restore-integrity
+
+permissions:
+  contents: read
+
+jobs:
+  verify-ac09-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: 96c7d950fe435a7a2f8af5c860a40d54a69a714a
+      LOCK_SHA256: 559a091ee783ce801ea673c8415a86be68a2201bd0a8715727a059381b0f3dbe
+      EVIDENCE_DIR: ${{ github.workspace }}/evidence
+
+    steps:
+      - name: Checkout verification harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout exact production candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          path: app
+
+      - name: Verify candidate identity and scope
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/meta
+          test "$(git -C app rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "$(git -C app status --porcelain)"
+          test "$(sha256sum app/package-lock.json | awk '{print $1}')" = "$LOCK_SHA256"
+          printf 'target_sha=%s\nharness_sha=%s\npackage_lock_sha256=%s\n'             "$TARGET_SHA" "$GITHUB_SHA" "$LOCK_SHA256" | tee evidence/meta/candidate.txt
+          git -C app diff --name-status 6e2d74aaabcc8a0041934378d4b81f3c682879b8 "$TARGET_SHA"             | tee evidence/meta/main-diff.txt
+          if git -C app diff --name-only 6e2d74aaabcc8a0041934378d4b81f3c682879b8 "$TARGET_SHA"             | grep -E '^(package-lock\.json|package\.json|src/(?!backup/backup\.ts)|tests/(?!backup/restoreReferentialIntegrity\.test\.ts))'; then
+            echo "Unexpected production candidate scope" >&2
+            exit 1
+          fi
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Baseline Gate 1 - npm ci
+        working-directory: app
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/baseline"
+          node --version | tee "$EVIDENCE_DIR/baseline/node-version.txt"
+          npm --version | tee "$EVIDENCE_DIR/baseline/npm-version.txt"
+          npm ci 2>&1 | tee "$EVIDENCE_DIR/baseline/01-npm-ci.log"
+          test -z "$(git status --porcelain package-lock.json)"
+
+      - name: Baseline Gate 2 - typecheck
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm run typecheck 2>&1 | tee "$EVIDENCE_DIR/baseline/02-typecheck.log"
+
+      - name: Baseline Gate 3a - full test run 1
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm test -- --reporter=json --outputFile="$EVIDENCE_DIR/baseline/full-test-1.json"             2>&1 | tee "$EVIDENCE_DIR/baseline/03-full-test-1.log"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const r = JSON.parse(readFileSync(process.env.EVIDENCE_DIR + '/baseline/full-test-1.json', 'utf8'));
+          if (r.success !== true || r.numFailedTests !== 0 || r.numPendingTests !== 0 || r.numFailedTestSuites !== 0) {
+            console.error(r);
+            process.exit(1);
+          }
+          NODE
+
+      - name: Baseline Gate 3b - full test run 2 non-flake check
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm test -- --reporter=json --outputFile="$EVIDENCE_DIR/baseline/full-test-2.json"             2>&1 | tee "$EVIDENCE_DIR/baseline/03-full-test-2.log"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const a = JSON.parse(readFileSync(process.env.EVIDENCE_DIR + '/baseline/full-test-1.json', 'utf8'));
+          const b = JSON.parse(readFileSync(process.env.EVIDENCE_DIR + '/baseline/full-test-2.json', 'utf8'));
+          const keys = [
+            'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests',
+            'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites'
+          ];
+          for (const key of keys) {
+            if (a[key] !== b[key]) {
+              console.error('Non-deterministic test count', key, a[key], b[key]);
+              process.exit(1);
+            }
+          }
+          if (b.success !== true || b.numFailedTests !== 0 || b.numPendingTests !== 0 || b.numFailedTestSuites !== 0) {
+            process.exit(1);
+          }
+          NODE
+          if grep -R -nE '\.(skip|todo|fails)\(|describe\.(skip|todo)|it\.(skip|todo|fails)|test\.(skip|todo|fails)' tests; then
+            echo "Skipped/todo/known-failure annotation detected" >&2
+            exit 1
+          fi
+
+      - name: Baseline Gate 4 - production build
+        working-directory: app
+        run: |
+          set -euo pipefail
+          npm run build 2>&1 | tee "$EVIDENCE_DIR/baseline/04-build.log"
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -f dist/sw.js
+          compgen -G 'dist/workbox-*.js' > /dev/null
+          find dist -type f -print0 | sort -z | xargs -0 sha256sum             > "$EVIDENCE_DIR/baseline/dist-sha256.txt"
+
+      - name: Record Baseline 4/4 result
+        working-directory: app
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const r = JSON.parse(readFileSync(process.env.EVIDENCE_DIR + '/baseline/full-test-2.json', 'utf8'));
+          const summary = {
+            targetCommit: process.env.TARGET_SHA,
+            install: 'PASS',
+            typecheck: 'PASS',
+            test: 'PASS',
+            build: 'PASS',
+            tests: {
+              total: r.numTotalTests,
+              passed: r.numPassedTests,
+              failed: r.numFailedTests,
+              skipped: r.numPendingTests,
+              error: 0,
+              flaky: 0,
+              knownFailure: 0,
+              confirmationRuns: 2
+            }
+          };
+          writeFileSync(process.env.EVIDENCE_DIR + '/baseline/baseline-summary.json', JSON.stringify(summary, null, 2) + '\n');
+          NODE
+
+      - name: Prepare AC-09 evidence harness
+        run: |
+          set -euo pipefail
+          mkdir -p app/release-tests
+          cp harness/release-tests/ac09-evidence.test.ts app/release-tests/
+          test -z "$(git -C app status --porcelain src)"
+          test -z "$(git -C app status --porcelain package-lock.json)"
+
+      - name: AC-09 targeted re-verification
+        working-directory: app
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/AC-09"
+          npx vitest run release-tests/ac09-evidence.test.ts             --reporter=json --outputFile="$EVIDENCE_DIR/AC-09/vitest.json"             2>&1 | tee "$EVIDENCE_DIR/AC-09/vitest.log"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const v = JSON.parse(readFileSync(process.env.EVIDENCE_DIR + '/AC-09/vitest.json', 'utf8'));
+          const r = JSON.parse(readFileSync(process.env.EVIDENCE_DIR + '/AC-09/ac09-final-report.json', 'utf8'));
+          if (
+            v.success !== true || v.numFailedTests !== 0 || v.numPendingTests !== 0
+            || r.pass !== true || r.p0Failed !== 0 || r.error !== 0 || r.skipped !== 0
+            || r.flaky !== 0 || r.knownFailure !== 0 || r.blocker !== 0 || r.critical !== 0
+          ) {
+            console.error({ vitest: v, report: r });
+            process.exit(1);
+          }
+          NODE
+
+      - name: Record verification status
+        if: always()
+        run: |
+          mkdir -p evidence/meta
+          printf 'target_sha=%s\nrun_id=%s\njob_status=%s\nAC-10-and-later=HOLD\nmain_updated=NO\n'             "$TARGET_SHA" "$GITHUB_RUN_ID" "${{ job.status }}"             > evidence/meta/run-status.txt
+
+      - name: Upload AC-09 fix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-8-ac09-fix-96c7d950-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          path: evidence/**
