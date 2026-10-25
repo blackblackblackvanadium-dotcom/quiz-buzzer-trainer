@@ -62,6 +62,28 @@ function validateRestoreSnapshot(backup: PortableBackupV1): void {
     'Backup study states',
   );
   assertUnique(backup.data.settings.map((setting) => setting.key), 'Backup settings');
+
+  const questionKeys = new Set(
+    backup.data.questions.map((question) => `${question.questionId}::${question.revisionId}`),
+  );
+  const sessionIds = new Set(backup.data.sessions.map((session) => session.sessionId));
+
+  for (const attempt of backup.data.attempts) {
+    const questionKey = `${attempt.questionId}::${attempt.revisionId}`;
+    if (!questionKeys.has(questionKey)) {
+      throw new Error(`Backup attempt ${attempt.attemptId} references missing question ${questionKey}`);
+    }
+    if (!sessionIds.has(attempt.sessionId)) {
+      throw new Error(`Backup attempt ${attempt.attemptId} references missing session ${attempt.sessionId}`);
+    }
+  }
+
+  for (const state of backup.data.studyStates) {
+    const questionKey = `${state.questionId}::${state.revisionId}`;
+    if (!questionKeys.has(questionKey)) {
+      throw new Error(`Backup study state references missing question ${questionKey}`);
+    }
+  }
 }
 
 /**
