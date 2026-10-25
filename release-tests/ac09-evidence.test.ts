@@ -1,6 +1,7 @@
 import { afterAll, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { StudyState } from '../src/domain/types';
 import { createBackup, parseBackupJson, replaceRestore, serializeBackup } from '../src/backup/backup';
 import { getDatabaseGeneration } from '../src/data/concurrency';
@@ -239,7 +240,7 @@ it('AC-09 corrupted backup rejection evidence matrix', async () => {
     }
 
     const after = await createBackup(target);
-    const unchanged = JSON.stringify(after.data) === JSON.stringify(before.data);
+    const unchanged = isDeepStrictEqual(after.data, before.data);
     const generationUnchanged = getDatabaseGeneration() === generationBefore;
     const broadcastSuppressed = broadcasts.length === 0;
     let readWriteUsable = true;
@@ -282,13 +283,14 @@ it('AC-09 corrupted backup rejection evidence matrix', async () => {
   await replaceRestore(valid, validTarget);
   const validPost = await createBackup(validTarget);
   await writeJson('snapshots/valid-restore-post.json', validPost);
+  const restoredExactly = isDeepStrictEqual(validPost.data, valid.data);
   const validPass =
-    JSON.stringify(validPost.data) === JSON.stringify(valid.data)
+    restoredExactly
     && getDatabaseGeneration() !== generationBeforeValid
     && validBroadcasts.length === 1;
   results.push({
     case: 'valid-backup-restore',
-    restoredExactly: JSON.stringify(validPost.data) === JSON.stringify(valid.data),
+    restoredExactly,
     generationAdvanced: getDatabaseGeneration() !== generationBeforeValid,
     broadcasts: validBroadcasts.length,
     pass: validPass,
