@@ -1,6 +1,6 @@
 import { afterAll, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import type { StudyState } from '../src/domain/types';
 import { createBackup, parseBackupJson, replaceRestore, serializeBackup } from '../src/backup/backup';
 import { getDatabaseGeneration } from '../src/data/concurrency';
@@ -76,7 +76,9 @@ function clone<T>(value: T): T {
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
-  await writeFile(resolve(root, path), JSON.stringify(value, null, 2) + '\n');
+  const output = resolve(root, path);
+  await mkdir(dirname(output), { recursive: true });
+  await writeFile(output, JSON.stringify(value, null, 2) + '\n');
 }
 
 afterAll(async () => {
